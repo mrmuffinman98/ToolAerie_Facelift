@@ -1,0 +1,17 @@
+# requirements.txt
+# Install on Raspberry Pi after setting up the system packages below.
+#
+# System packages (run first):
+#   sudo apt install python3-picamera2 python3-dev -y
+#
+# Then activate your venv and run:
+#   pip install -r requirements.txt
+
+# ArUco is only in the contrib package — do NOT use opencv-python
+opencv-contrib-python-headless
+numpy
+vtracer
+Pillow
+
+# Optional — only needed for Phase 2 (tool presence detection web viewer)
+# Flask

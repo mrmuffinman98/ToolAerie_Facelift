@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; background: #ffffff; padding: 20px; }
+  .section { width: 380px; background: #ffffff; border: 1px solid #ccc; font-size: 10px; color: #222; }
+  .header { background: #1a3a4a; color: white; font-size: 10px; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase; padding: 5px 10px; }
+  .body { padding: 10px 12px; }
+  .pipeline-row { display: flex; align-items: center; gap: 4px; margin-bottom: 10px; }
+  .box { background: #2e7d9e; color: white; font-size: 9px; font-weight: bold; padding: 4px 7px; border-radius: 2px; text-align: center; }
+  .arrow { color: #2e7d9e; font-size: 13px; }
+  .pill { background: #1a3a4a; color: white; font-size: 9px; padding: 2px 7px; border-radius: 10px; display: inline-block; margin: 2px 2px 0 0; }
+</style>
+</head>
+<body>
+<div class="section">
+  <div class="header">Code Overview</div>
+  <div class="body">
+
+    <div class="pipeline-row">
+      <div class="box">capture.py</div>
+      <div class="arrow">›</div>
+      <div class="box">process.py</div>
+      <div class="arrow">›</div>
+      <div class="box">vectorize.py</div>
+      <div class="arrow">›</div>
+      <div class="box">export.py</div>
+    </div>
+
+    <p style="font-size:9px; line-height:1.6; margin-bottom:10px;">
+      Pi camera captures a JPEG → OpenCV undistorts and detects an ArUco marker for real-world scale →
+      tool silhouette is extracted and expanded for foam clearance → vtracer converts the mask to SVG →
+      dimensions are patched to mm for the laser cutter.
+      All parameters live in <strong>config.py</strong>.
+    </p>
+
+    <div>
+      <span class="pill">Python 3</span>
+      <span class="pill">OpenCV</span>
+      <span class="pill">Picamera2</span>
+      <span class="pill">vtracer</span>
+      <span class="pill">Raspberry Pi</span>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

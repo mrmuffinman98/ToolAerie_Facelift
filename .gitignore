@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Output — SVG files are generated; don't commit them
+output/
+
+# Calibration images — large, hardware-specific; keep them local
+calibration_images/
+
+# Debug artefacts from development
+debug_mask.png
+capture_*.jpg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
