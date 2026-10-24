@@ -45,7 +45,8 @@ class PiCamera(BaseCamera):
     """Picamera2 kept running so Scan is instant (no 2 s start-up each time).
 
     NOTE: written from the Picamera2 docs but not exercised off the Pi. The
-    focus / white balance setup mirrors capture.py, which is known to work.
+    configuration, focus and white balance mirror capture.py, which is known
+    to work.
     """
     name = "Pi camera"
 
@@ -65,10 +66,18 @@ class PiCamera(BaseCamera):
             self._cam = self._Picamera2()
             # "RGB888" in Picamera2 is laid out B,G,R in memory, which is the
             # channel order OpenCV expects. No colour conversion needed.
-            cfg = self._cam.create_preview_configuration(
-                main={"size": config.IMAGE_RESOLUTION, "format": "RGB888"},
-                buffer_count=2,
-            )
+            #
+            # The camera is run in the same STILL configuration capture.py has
+            # always used (same size, format and sensor mode), only left running
+            # so scans are instant. That keeps the field of view identical to the
+            # photos the lens calibration in config.py was made from. Set
+            # PREVIEW_USES_STILL_CONFIG = False for a faster live view, but only
+            # if you re-check sizes afterwards.
+            make_cfg = (self._cam.create_still_configuration
+                        if config.PREVIEW_USES_STILL_CONFIG
+                        else self._cam.create_preview_configuration)
+            cfg = make_cfg(main={"size": config.IMAGE_RESOLUTION, "format": "RGB888"},
+                           buffer_count=2)
             self._cam.configure(cfg)
             self._cam.start()
             time.sleep(2)  # let auto exposure / white balance settle

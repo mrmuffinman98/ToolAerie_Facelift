@@ -63,6 +63,11 @@ SVG output is written to `output/`.
 
 A point-and-confirm app for scanning a whole drawer of tools in one sitting.
 
+**The processing is the original, unchanged pipeline.** The app only wraps it: lens
+correction, ArUco scaling, thresholding, vtracer tracing and SVG export are the same
+code as `main.py`. `tests/test_v1_equivalence.py` checks that for the same photo the app
+and the original pipeline give identical masks, scale and SVG files.
+
 **Start it**
 
 - Double-click the **Tool Aerie Scanner** icon on the desktop (set up once with

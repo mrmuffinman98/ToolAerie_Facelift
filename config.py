@@ -153,3 +153,8 @@ AUTOSCAN_STABLE_SECS = 1.0    # picture must hold still this long before scannin
 AUTOSCAN_STILL_LEVEL = 1.5    # "holding still" = average change below this (0-255 scale)
 AUTOSCAN_LEARN_SECS = 1.2     # time spent learning the empty board
 AUTOSCAN_CLEAR_SECS = 0.8     # board must be empty this long before re-arming
+
+# Pi camera: run the always-on live view in the same "still" configuration that
+# capture.py (the original, calibrated capture) uses. Keep True so every scan has
+# exactly the field of view the camera calibration was made for.
+PREVIEW_USES_STILL_CONFIG = True
