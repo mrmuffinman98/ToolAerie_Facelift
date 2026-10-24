@@ -110,6 +110,9 @@ def _modal(app, top: tk.Toplevel, width: int, height: int) -> None:
     top.transient(app)
     app.update_idletasks()
     sw, sh = app.winfo_screenwidth(), app.winfo_screenheight()
+    top.update_idletasks()
+    if height is None:                      # size to the content
+        height = top.winfo_reqheight() + 8
     width, height = min(width, sw - 20), min(height, sh - 40)
     x = max(0, app.winfo_rootx() + (app.winfo_width() - width) // 2)
     y = max(0, app.winfo_rooty() + (app.winfo_height() - height) // 2)
@@ -122,11 +125,13 @@ def _modal(app, top: tk.Toplevel, width: int, height: int) -> None:
     top.focus_set()
 
 
-def ask(app, title: str, message: str, buttons: list[tuple], cancel_value=None):
+def ask(app, title: str, message: str, buttons: list[tuple], cancel_value=None,
+        left: bool = False):
     """Show a modal question and return the value of the button pressed.
 
     buttons: list of (label, value, background colour, text colour)
-    Closing the window returns cancel_value.
+    Closing the window returns cancel_value. left=True left-aligns the text
+    (for numbered steps).
     """
     top = tk.Toplevel(app, bg=PANEL)
     top.title(title)
@@ -139,13 +144,14 @@ def ask(app, title: str, message: str, buttons: list[tuple], cancel_value=None):
     top.protocol("WM_DELETE_WINDOW", lambda: choose(cancel_value))
     tk.Label(top, text=title, bg=PANEL, fg=FG, font=app.f(16, True)
              ).pack(padx=24, pady=(20, 6))
-    tk.Label(top, text=message, bg=PANEL, fg=MUTED, font=app.f(12), justify="center",
+    tk.Label(top, text=message, bg=PANEL, fg=MUTED, font=app.f(12),
+             justify="left" if left else "center",
              wraplength=int(440 * app.k)).pack(padx=24, pady=(0, 14))
     for label, value, color, fg in buttons:
         Btn(top, label, (lambda v=value: choose(v)), color, fg, app.f(13, True),
             pady=8 if app.compact else 12).pack(fill="x", padx=28, pady=4)
     tk.Frame(top, bg=PANEL, height=14).pack()
-    _modal(app, top, int(520 * app.k), 40 + int((130 + 62 * len(buttons)) * app.k))
+    _modal(app, top, int(520 * app.k), None)
     app.wait_window(top)
     return result["v"]
 

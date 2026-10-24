@@ -87,7 +87,9 @@ class App(tk.Tk):
         self.startup_error: str | None = None
 
         try:
-            camera = cam_mod.open_camera(camera_kind, folder)
+            # "auto" asks for the real camera and, if it can't be used, says why
+            # (open_camera("auto") would fall back silently).
+            camera = cam_mod.open_camera("pi" if camera_kind == "auto" else camera_kind, folder)
         except cam_mod.CameraError as e:
             self.startup_error = str(e)
             camera = cam_mod.DemoCamera()
@@ -106,8 +108,12 @@ class App(tk.Tk):
                  ).pack(side="left", padx=14, pady=8)
         self.head_info = tk.Label(head, text="", bg=PANEL, fg=MUTED, font=self.f(11))
         self.head_info.pack(side="left", padx=8)
-        tk.Label(head, text=self.feed.camera.name, bg=PANEL, fg=MUTED, font=self.f(10)
-                 ).pack(side="right", padx=14)
+        if isinstance(self.feed.camera, cam_mod.DemoCamera):
+            tk.Label(head, text=" PRACTICE MODE: NOT THE REAL CAMERA ", bg=AMBER, fg="#2b1b00",
+                     font=self.f(11, True)).pack(side="right", padx=14, pady=6)
+        else:
+            tk.Label(head, text=f"Camera: {self.feed.camera.name}", bg=PANEL, fg=MUTED,
+                     font=self.f(10)).pack(side="right", padx=14)
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
@@ -410,8 +416,12 @@ class StartScreen(Screen):
 
         Btn(box, "START SCANNING", self.start, GREEN, DARK_GREEN_TEXT, app.f(18, True),
             padx=50, pady=10 if c else 15).pack(pady=(12 if c else 20, 4), fill="x")
-        Btn(box, "Quit", app.request_exit, PANEL, MUTED, app.f(11), padx=30, pady=5
-            ).pack(pady=(8, 0))
+        row2 = tk.Frame(box, bg=BG)
+        row2.pack(pady=(8, 0))
+        Btn(row2, "How it works", self.how_it_works, PANEL2, FG, app.f(11), padx=24, pady=5
+            ).pack(side="left", padx=4)
+        Btn(row2, "Quit", app.request_exit, PANEL, MUTED, app.f(11), padx=30, pady=5
+            ).pack(side="left", padx=4)
         self.note = tk.Label(box, text="", bg=BG, fg=AMBER, font=app.f(10),
                              wraplength=int(520 * app.k))
         self.note.pack(pady=(8, 0))
@@ -431,9 +441,21 @@ class StartScreen(Screen):
         self.final_lbl.config(
             text=f"This drawer will be saved as:  {storage.shorten(tb / storage.folder_name(self.name.get()), 56)}")
 
+    def how_it_works(self):
+        ask(self.app, "How it works",
+            "1.  Lay the printed marker flat on the light board, away from where tools go.\n"
+            "2.  Put one tool on the board and press SCAN (or turn on Auto-scan).\n"
+            "3.  Check the green outline on the photo. Press CONFIRM, or Retake if it looks wrong.\n"
+            "4.  Repeat for every tool in the drawer, then press Finish.\n"
+            "5.  Press SAVE. The files are put in the folder you chose, ready to copy to a USB stick.",
+            [("Got it", None, GREEN, DARK_GREEN_TEXT)], left=True)
+
     def on_show(self):
         if self.app.startup_error:
-            self.note.config(text=f"{self.app.startup_error}\nUsing the demo camera instead.")
+            self.note.config(
+                text=f"No camera found: {self.app.startup_error}\n"
+                     "The app is in PRACTICE MODE (fake camera). Check the camera cable, "
+                     "close anything else using the camera, then restart the app.")
         self.update_final()
 
     def on_key(self, e):

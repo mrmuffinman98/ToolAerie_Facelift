@@ -17,7 +17,25 @@ Each stage is a discrete, independently testable module.
 - Backlit light board
 - Laser cutter (SVG input via USB/network)
 
-## Setup
+## Install on the Raspberry Pi (and update)
+
+Download the ZIP of this branch, unzip it, open a Terminal in the unzipped folder and run:
+
+```bash
+bash install.sh
+```
+
+That installs anything missing, copies the app to `~/ToolAerie_App` ... see below, sets up
+its Python environment, and puts a **Tool Aerie Scanner** icon and a **ToolAerie** folder on
+the desktop. After that nobody needs a terminal: double-click the icon.
+
+- **Update:** download the newer ZIP, unzip it, run `bash install.sh` again. The app code is
+  replaced; saved drawers and settings are not touched.
+- The app lives in `~/ToolAerieApp`; you can delete the downloaded folder afterwards.
+- If the camera can't be used, the app opens in an orange **PRACTICE MODE** (fake camera)
+  and says why, so a practice scan can't be mistaken for a real one.
+
+## Manual setup (original v1 workflow)
 
 ### 1. System packages (on the Pi)
 
