@@ -59,6 +59,40 @@ python main.py --image sample_images/wrench.jpg
 
 SVG output is written to `output/`.
 
+## Scanner app (new interface)
+
+A point-and-confirm app for scanning a whole drawer of tools in one sitting.
+
+```bash
+./run_desktop.sh            # normal window
+./run_touch.sh              # fullscreen, big buttons, for the Pi touchscreen
+python app.py --demo        # fake camera, no hardware needed
+python app.py --folder DIR  # use photos from a folder instead of the camera
+```
+
+**Flow:** Start → *Scan* → review the outline over the photo → *Confirm* (or *Retake*) →
+next tool … → *Finish*.
+
+- The review screen shows the tool's real size and lets you adjust clearance,
+  edge threshold and speck filter; the outline updates live.
+- Desktop shortcuts: `Space` scans / confirms, `R` or `Backspace` retakes.
+- *Finish* lays every confirmed tool out in one SVG, stacked in a column (or wrapped
+  into rows) with an adjustable gap, at real size (1 SVG unit = 1 mm).
+- Needs `python3-tk` (preinstalled with Raspberry Pi OS desktop).
+
+Each session is a folder in `~/ToolAerie` (change `SESSIONS_DIR` in `config.py`):
+
+```
+Drawer_20261024_1313/
+├── Drawer_20261024_1313_combined.svg   ← all tools, ready for the laser software
+├── tools/tool_01.svg ...               ← one real-size SVG per tool
+├── photos/tool_01.jpg ...              ← the photo each outline came from
+└── session.json
+```
+
+Code: `app.py` (screens), `scan_service.py` (scan + review overlay),
+`session.py` (saving + combined layout), `camera.py` (Pi camera, demo camera).
+
 ## Tests
 
 ```bash

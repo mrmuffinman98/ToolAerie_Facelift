@@ -130,9 +130,15 @@ def detect_scale(image: np.ndarray) -> float:
             "Run: python generate_aruco_marker.py to create the reference marker."
         )
 
-    # Use the first detected marker.
-    # corners[0] has shape (1, 4, 2); reshape to (4, 2): TL, TR, BR, BL.
-    pts = corners[0].reshape((4, 2))
+    # Prefer the marker whose ID matches config.ARUCO_MARKER_ID; otherwise use
+    # the first one found. (ids is (N,1) on OpenCV 4.x but (N,) on newer
+    # builds, so flatten it before indexing.)
+    flat_ids = np.asarray(ids).flatten()
+    pick = next((i for i, v in enumerate(flat_ids)
+                 if int(v) == config.ARUCO_MARKER_ID), 0)
+    marker_id = int(flat_ids[pick])
+    # corners[pick] has shape (1, 4, 2); reshape to (4, 2): TL, TR, BR, BL.
+    pts = corners[pick].reshape((4, 2))
 
     # Average all four side lengths to reduce corner sub-pixel detection jitter.
     side_lengths_px = [
@@ -142,7 +148,7 @@ def detect_scale(image: np.ndarray) -> float:
     pixels_per_mm = avg_side_px / config.ARUCO_MARKER_SIZE_MM
 
     print(
-        f"[process] ArUco marker ID {ids[0][0]} detected. "
+        f"[process] ArUco marker ID {marker_id} detected. "
         f"Avg side: {avg_side_px:.1f}px / {config.ARUCO_MARKER_SIZE_MM}mm → "
         f"{pixels_per_mm:.4f} px/mm"
     )

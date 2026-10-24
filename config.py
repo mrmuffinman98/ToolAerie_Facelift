@@ -3,6 +3,8 @@
 # Edit these values once during station setup. Do not scatter magic numbers
 # through the pipeline modules — everything configurable lives here.
 
+from pathlib import Path
+
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -116,3 +118,17 @@ SVG_OUTPUT_PATH   = "/home/tomas/Desktop/captures"
 # Used to set the SVG canvas size (8" x 11.5").
 LIGHT_BOARD_WIDTH_MM  = 292.1   # 11.5 inches
 LIGHT_BOARD_HEIGHT_MM = 203.2   #  8.0 inches
+
+# ---------------------------------------------------------------------------
+# Scanning app (app.py)
+# ---------------------------------------------------------------------------
+
+# Each scanning session gets its own folder in here (photos, per-tool SVGs and
+# the combined shadow-board SVG). Defaults to ~/ToolAerie in the home folder.
+SESSIONS_DIR = str(Path.home() / "ToolAerie")
+
+# Space left between neighbouring tools in the combined SVG, in millimetres.
+DEFAULT_TOOL_GAP_MM = 10.0
+
+# Empty margin around the edge of the combined SVG, in millimetres.
+COMBINED_MARGIN_MM = 5.0

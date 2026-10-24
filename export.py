@@ -23,6 +23,7 @@ def svg_to_file(
     svg_content: str,
     pixels_per_mm: float,
     output_filename: str | None = None,
+    output_dir: str | None = None,
 ) -> str:
     """Patch SVG units to mm and write to the output directory.
 
@@ -33,6 +34,7 @@ def svg_to_file(
                        convert pixel dimensions to real-world mm dimensions.
         output_filename: Desired output filename. Defaults to a timestamped
                          file in SVG_OUTPUT_PATH from config.
+        output_dir: Folder to write into. Defaults to SVG_OUTPUT_PATH.
 
     Returns:
         Absolute path to the saved SVG file.
@@ -41,7 +43,7 @@ def svg_to_file(
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         output_filename = f"tool_{timestamp}.svg"
 
-    output_dir = Path(config.SVG_OUTPUT_PATH)
+    output_dir = Path(output_dir or config.SVG_OUTPUT_PATH)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = (output_dir / Path(output_filename).name).resolve()
 
@@ -102,6 +104,39 @@ def svg_to_file(
         f"({width_mm:.1f}mm × {height_mm:.1f}mm)"
     )
     return str(output_path)
+
+
+def tool_paths(svg_content: str) -> tuple[list[str], float, float]:
+    """Pull the tool outline subpaths out of a raw vtracer SVG.
+
+    Applies the same border-rectangle removal as svg_to_file() but returns the
+    data instead of writing a file, so several tools can be placed into one
+    combined SVG (see session.py).
+
+    Returns:
+        (path_data_list, width_px, height_px) — each path string is one closed
+        subpath in the SVG's pixel coordinate space.
+    """
+    root = ET.fromstring(svg_content)
+    parts = root.get("viewBox", "").split()
+    if len(parts) == 4:
+        width_px, height_px = float(parts[2]), float(parts[3])
+    else:
+        width_px  = float(root.get("width",  "100").replace("px", ""))
+        height_px = float(root.get("height", "100").replace("px", ""))
+
+    out: list[str] = []
+    for elem in root.iter(f"{{{_SVG_NS}}}path"):
+        d = elem.get("d", "")
+        for sp in re.split(r"Z\s*", d.strip()):
+            sp = sp.strip()
+            if not sp:
+                continue
+            m = re.match(r"M\s*([\d.eE+-]+)\s+([\d.eE+-]+)", sp)
+            if m and float(m.group(1)) < 5 and float(m.group(2)) < 5:
+                continue  # background rectangle
+            out.append(sp + " Z")
+    return out, width_px, height_px
 
 
 if __name__ == "__main__":
