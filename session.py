@@ -1,7 +1,9 @@
 # session.py
-# A scanning session = one folder holding everything for one drawer:
+# A scanning session = one folder holding everything for one drawer. It is
+# built in a scratch folder while scanning and copied to the user's chosen
+# location by save_to():
 #
-#   <SESSIONS_DIR>/<session name>/
+#   <save location>/<drawer name>/
 #       photos/tool_01.jpg ...      the prepared photo of each confirmed tool
 #       tools/tool_01.svg ...       one real-size SVG per tool
 #       <session name>_combined.svg all tools laid out in one file, with gaps
@@ -24,6 +26,7 @@ import cv2
 import config
 import export
 import scan_service
+import storage
 
 _SVG_NS = "http://www.w3.org/2000/svg"
 _STROKE_MM = 0.1  # hairline cut width, same as the single-tool export
@@ -56,20 +59,35 @@ class Placement:
 
 
 class Session:
-    def __init__(self, name: str | None = None, root: str | None = None):
-        root_dir = Path(root or config.SESSIONS_DIR).expanduser()
-        base = _slug(name or time.strftime("Drawer_%Y%m%d_%H%M"))
+    """One drawer being scanned.
+
+    Everything is written into a scratch folder (root/<name>) while scanning.
+    Nothing reaches the user's chosen folder until save_to() is called.
+    """
+
+    def __init__(self, title: str | None = None, root: str | None = None):
+        root_dir = Path(root).expanduser() if root else storage.new_work_root()
+        self._owned_root = None if root else root_dir   # scratch root we created
+        self.title = storage.folder_name(title or time.strftime("Drawer %Y-%m-%d %H%M"))
+        base = storage.file_stem(self.title)
         folder, n = root_dir / base, 2
         while folder.exists():               # never overwrite an earlier session
             folder = root_dir / f"{base}_{n}"
             n += 1
-        self.name = folder.name
+        self.name = folder.name              # file-friendly name (no spaces)
         self.folder = folder
         (folder / "photos").mkdir(parents=True)
         (folder / "tools").mkdir()
         self.tools: list[ToolRecord] = []
         self.gap_mm = float(config.DEFAULT_TOOL_GAP_MM)
+        self.max_width_mm: float | None = None   # None = one column
+        self.dirty = False                   # unsaved work?
+        self.saved_to: Path | None = None
         self._save_manifest()
+
+    def cleanup(self) -> None:
+        """Delete the scratch files (after saving, or when the user discards)."""
+        storage.remove_tree(self._owned_root or self.folder)
 
     # --- tools -----------------------------------------------------------
 
@@ -100,6 +118,7 @@ class Session:
                          str(photo.relative_to(self.folder)),
                          w_px / ppm, h_px / ppm, ppm, preview)
         self.tools.append(rec)
+        self.dirty = True
         self._save_manifest()
         return rec
 
@@ -110,6 +129,7 @@ class Session:
         rec = self.tools.pop()
         for rel in (rec.svg_file, rec.photo_file):
             (self.folder / rel).unlink(missing_ok=True)
+        self.dirty = bool(self.tools)
         self._save_manifest()
         return rec
 
@@ -178,11 +198,27 @@ class Session:
         self._save_manifest(max_width_mm=max_width_mm)
         return out
 
+    def save_to(self, dest: str | Path, replace: bool = False) -> Path:
+        """Write the combined SVG, then copy the whole drawer to dest.
+
+        Returns the path of the saved combined SVG inside dest. Marks the
+        session as saved only after the copy has completed and been checked.
+        """
+        dest = Path(dest)
+        combined = self.export_combined(self.gap_mm, self.max_width_mm)
+        storage.copy_drawer(self.folder, dest, replace=replace)
+        saved_file = dest / combined.name
+        if not saved_file.exists() or saved_file.stat().st_size != combined.stat().st_size:
+            raise OSError(f"The saved file could not be verified in {dest}")
+        self.saved_to = dest
+        self.dirty = False
+        return saved_file
+
     # --- bookkeeping -----------------------------------------------------
 
     def _save_manifest(self, **extra) -> None:
         data = {
-            "name": self.name,
+            "name": self.title,
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "gap_mm": self.gap_mm,
             "tools": [{k: v for k, v in asdict(t).items() if k != "preview_outlines_mm"}

@@ -123,9 +123,12 @@ LIGHT_BOARD_HEIGHT_MM = 203.2   #  8.0 inches
 # Scanning app (app.py)
 # ---------------------------------------------------------------------------
 
-# Each scanning session gets its own folder in here (photos, per-tool SVGs and
-# the combined shadow-board SVG). Defaults to ~/ToolAerie in the home folder.
-SESSIONS_DIR = str(Path.home() / "ToolAerie")
+# Where the app suggests saving finished drawers (the user can pick any other
+# folder inside the app, and it remembers the last one used).
+DEFAULT_SAVE_ROOT = str(Path.home() / "Desktop" / "ToolAerie")
+
+# Scratch space used while scanning, before the user presses Save.
+WORK_DIR = str(Path.home() / ".cache" / "toolaerie" / "work")
 
 # Space left between neighbouring tools in the combined SVG, in millimetres.
 DEFAULT_TOOL_GAP_MM = 10.0

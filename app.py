@@ -17,15 +17,17 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import dataclasses
 import os
 import platform
 import queue
 import subprocess
+import sys
 import threading
 import time
+import traceback
 import tkinter as tk
+from pathlib import Path
 from tkinter import font as tkfont
 
 import cv2
@@ -34,95 +36,13 @@ import numpy as np
 import camera as cam_mod
 import config
 import scan_service
+import storage
 from scan_service import ScanError, Settings
 from session import Session
+from ui import (BG, PANEL, PANEL2, FG, MUTED, GREEN, AMBER, RED, BLUE, DARK_GREEN_TEXT,
+                Btn, Stepper, FolderPicker, ask, png_photo)
 
-# --- look & feel -----------------------------------------------------------
-
-BG, PANEL, PANEL2 = "#12161b", "#1c222a", "#252d37"
-FG, MUTED = "#e8edf2", "#8d99a8"
-GREEN, AMBER, RED, BLUE = "#2ecc71", "#f5a623", "#e5534b", "#3b82f6"
-
-
-class Btn(tk.Label):
-    """A flat, touch-friendly button (tk.Button ignores colours on macOS)."""
-
-    def __init__(self, parent, text, command, color=PANEL2, fg=FG, font=None,
-                 padx=18, pady=10, **kw):
-        super().__init__(parent, text=text, bg=color, fg=fg, font=font,
-                         padx=padx, pady=pady, cursor="hand2", **kw)
-        self._color, self._command, self._enabled = color, command, True
-        self.bind("<Button-1>", self._press)
-        self.bind("<ButtonRelease-1>", self._release)
-
-    def _press(self, _e):
-        if self._enabled:
-            self.config(bg=self._shade(self._color, 1.25))
-
-    def _release(self, e):
-        if not self._enabled:
-            return
-        self.config(bg=self._color)
-        if 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height():
-            self._command()
-
-    def set_enabled(self, on: bool):
-        self._enabled = on
-        self.config(bg=self._color if on else PANEL, fg=FG if on else MUTED)
-
-    @staticmethod
-    def _shade(hexcolor, k):
-        r, g, b = (int(hexcolor[i:i + 2], 16) for i in (1, 3, 5))
-        return "#%02x%02x%02x" % tuple(min(255, int(c * k)) for c in (r, g, b))
-
-
-class Stepper(tk.Frame):
-    """  Label      [-]  value  [+]  """
-
-    def __init__(self, app, parent, label, value, step, lo, hi, fmt, on_change, hint=None):
-        super().__init__(parent, bg=PANEL)
-        self.value, self.step, self.lo, self.hi, self.fmt = value, step, lo, hi, fmt
-        self.on_change = on_change
-        c = app.compact
-        lab = tk.Label(self, text=label, bg=PANEL, fg=FG, font=app.f(10 if c else 11),
-                       anchor="w")
-        minus = Btn(self, "−", lambda: self.bump(-1), font=app.f(14 if c else 16, True),
-                    padx=14, pady=0 if c else 2)
-        self.lbl = tk.Label(self, text=fmt.format(value), bg=PANEL, fg=GREEN,
-                            font=app.f(11 if c else 13, True), width=9)
-        plus = Btn(self, "+", lambda: self.bump(+1), font=app.f(14 if c else 16, True),
-                   padx=14, pady=0 if c else 2)
-        if c:   # one row: label on the left, controls on the right
-            self.grid_columnconfigure(0, weight=1)
-            lab.grid(row=0, column=0, sticky="w")
-            minus.grid(row=0, column=1, padx=(4, 0))
-            self.lbl.grid(row=0, column=2)
-            plus.grid(row=0, column=3)
-        else:
-            lab.grid(row=0, column=0, columnspan=3, sticky="w")
-            minus.grid(row=1, column=0, pady=3)
-            self.lbl.grid(row=1, column=1)
-            plus.grid(row=1, column=2, pady=3)
-            if hint:
-                tk.Label(self, text=hint, bg=PANEL, fg=MUTED, font=app.f(9), anchor="w"
-                         ).grid(row=2, column=0, columnspan=3, sticky="w")
-
-    def bump(self, direction):
-        v = min(max(self.value + direction * self.step, self.lo), self.hi)
-        if abs(v - self.value) > 1e-9:
-            self.set(v)
-            self.on_change(v)
-
-    def set(self, v):
-        self.value = v
-        self.lbl.config(text=self.fmt.format(v))
-
-
-def png_photo(rgb_or_bgr: np.ndarray, is_bgr: bool = False) -> tk.PhotoImage:
-    """Numpy image -> Tk PhotoImage via PNG (no PIL.ImageTk dependency)."""
-    img = rgb_or_bgr if is_bgr else cv2.cvtColor(rgb_or_bgr, cv2.COLOR_RGB2BGR)
-    ok, buf = cv2.imencode(".png", img, [cv2.IMWRITE_PNG_COMPRESSION, 1])
-    return tk.PhotoImage(data=base64.b64encode(buf.tobytes()))
+APP_DIR = Path(__file__).resolve().parent
 
 
 # ---------------------------------------------------------------------------
@@ -144,11 +64,23 @@ class App(tk.Tk):
             self.attributes("-fullscreen", True)
             self.config(cursor="none")
         else:
-            self.geometry("1180x720")
-            self.minsize(900, 600)
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            self.geometry(f"{min(1180, sw)}x{min(720, sh - 60)}+0+0")
+            self.minsize(min(900, sw), min(560, sh - 60))
+            try:
+                self.attributes("-zoomed", True)     # fill the screen (Linux)
+            except tk.TclError:
+                pass
+        try:
+            self.iconphoto(True, tk.PhotoImage(file=str(APP_DIR / "assets" / "toolaerie.png")))
+        except tk.TclError:
+            pass
+        self.report_callback_exception = self._on_ui_error
+        self._closing = False
 
         self.settings = Settings()
         self.session: Session | None = None
+        self.toolbox: Path = storage.default_toolbox()   # where drawers get saved
         self._fonts: dict = {}
         self.startup_error: str | None = None
 
@@ -190,7 +122,7 @@ class App(tk.Tk):
         self.bind("<F11>", lambda e: self.attributes(
             "-fullscreen", not self.attributes("-fullscreen")))
         self.bind("<Key>", self._key)
-        self.protocol("WM_DELETE_WINDOW", self.quit_app)
+        self.protocol("WM_DELETE_WINDOW", self.request_exit)
 
     # --- helpers ---------------------------------------------------------
 
@@ -207,10 +139,18 @@ class App(tk.Tk):
         scr = self.screens[name]
         scr.tkraise()
         scr.on_show()
-        n = len(self.session.tools) if self.session else 0
+        self.refresh_header()
+
+    def refresh_header(self):
+        s = self.session
+        if not s:
+            self.head_info.config(text="", fg=MUTED)
+            return
+        n = len(s.tools)
+        state = "saved" if (s.saved_to and not s.dirty) else "not saved yet"
         self.head_info.config(
-            text=f"{self.session.name}   ·   {n} tool{'s' if n != 1 else ''} saved"
-            if self.session else "")
+            text=f"{s.title}   -   {n} tool{'s' if n != 1 else ''} scanned   -   {state}",
+            fg=MUTED if state == "saved" else AMBER)
 
     def run_bg(self, fn, ok, err=None):
         """Run fn() on a worker thread; call ok(result) / err(exc) on the UI thread."""
@@ -235,7 +175,17 @@ class App(tk.Tk):
         poll()
 
     def fatal(self, exc):
+        storage.log_error("".join(traceback.format_exception(exc)) if isinstance(
+            exc, BaseException) else str(exc))
         self.screens[self.current].flash(f"Error: {exc}", RED, 8000)
+
+    def _on_ui_error(self, exc, val, tb):
+        storage.log_error("".join(traceback.format_exception(exc, val, tb)))
+        try:
+            self.screens[self.current].flash(f"Error: {val}  (details in {storage.log_path()})",
+                                             RED, 9000)
+        except Exception:
+            pass
 
     def next_demo_tool(self):
         if isinstance(self.feed.camera, cam_mod.DemoCamera):
@@ -245,12 +195,6 @@ class App(tk.Tk):
 
     def _key(self, e):
         self.screens[self.current].on_key(e)
-
-    def quit_app(self):
-        try:
-            self.feed.stop()
-        finally:
-            self.destroy()
 
     def open_folder(self, path):
         try:
@@ -263,6 +207,123 @@ class App(tk.Tk):
         except Exception as e:
             self.fatal(e)
 
+    # --- saving, deleting and leaving ---------------------------------------
+
+    def destination(self) -> Path:
+        """Folder this drawer will be (or was) saved to."""
+        s = self.session
+        if s.saved_to and s.saved_to.parent == self.toolbox:
+            return s.saved_to                      # saving again over our own copy
+        return self.toolbox / storage.folder_name(s.title)
+
+    def has_unsaved(self) -> bool:
+        return bool(self.session and self.session.tools and self.session.dirty)
+
+    def choose_toolbox(self) -> bool:
+        """Let the user pick / create the folder drawers are saved in."""
+        picked = FolderPicker(self, self.toolbox, "Choose or create the toolbox folder").show()
+        if picked is None:
+            return False
+        self.toolbox = picked
+        storage.save_settings(toolbox_dir=str(picked))
+        if self.session and self.session.tools:
+            self.session.dirty = True              # the saved copy is no longer the target
+        self.refresh_header()
+        return True
+
+    def save_session(self, on_saved=None):
+        """Copy the drawer to its destination. Calls on_saved() only on success."""
+        s = self.session
+        dest, replace = self.destination(), False
+        if dest == s.saved_to:
+            replace = True
+        elif storage.is_nonempty_dir(dest):
+            choice = ask(self, "That folder already exists",
+                         f'"{dest.name}" is already in {storage.shorten(dest.parent)}.',
+                         [("Replace it", "replace", AMBER, "#2b1b00"),
+                          ("Keep both (save a new copy)", "copy", BLUE, "#ffffff"),
+                          ("Cancel", None, PANEL2, FG)])
+            if choice is None:
+                return
+            if choice == "copy":
+                dest = storage.unique_child(dest.parent, dest.name)
+            else:
+                replace = True
+        scr = self.screens[self.current]
+        scr.flash("Saving...", MUTED, 20000)
+
+        def ok(saved_file):
+            storage.save_settings(toolbox_dir=str(self.toolbox))
+            self.refresh_header()
+            done = self.screens["DoneScreen"]
+            done.show_saved()
+            self.screens[self.current].flash("Saved", GREEN, 1500)
+            if on_saved:
+                on_saved()
+
+        def err(e):
+            self.screens[self.current].flash(
+                f"Could not save to {storage.shorten(dest, 40)}: {e}", RED, 10000)
+            storage.log_error(f"save failed: {e!r}")
+
+        self.run_bg(lambda: s.save_to(dest, replace=replace), ok, err)
+
+    def guard_unsaved(self, proceed):
+        """Run proceed() once any unsaved drawer has been saved or deleted.
+
+        Cancel leaves everything as it is and does not call proceed().
+        """
+        if not self.has_unsaved():
+            proceed()
+            return
+        s = self.session
+        n = len(s.tools)
+        choice = ask(
+            self, "This drawer isn't saved yet",
+            f'"{s.title}" has {n} scanned tool{"s" if n != 1 else ""} that '
+            f"haven't been saved.\n\nSave to:  {storage.shorten(self.destination(), 90)}",
+            [("Save", "save", GREEN, DARK_GREEN_TEXT),
+             ("Delete project", "delete", RED, "#ffffff"),
+             ("Cancel", None, PANEL2, FG)])
+        if choice == "save":
+            self.save_session(on_saved=proceed)
+        elif choice == "delete":
+            sure = ask(self, "Delete this drawer?",
+                       f"The {n} scanned tool{'s' if n != 1 else ''} will be gone for good. "
+                       "This can't be undone.",
+                       [("Yes, delete it", "yes", RED, "#ffffff"),
+                        ("No, keep it", None, PANEL2, FG)])
+            if sure == "yes":
+                self.discard_session()
+                proceed()
+
+    def discard_session(self):
+        if self.session:
+            self.session.cleanup()
+        self.session = None
+        self.refresh_header()
+
+    def new_drawer(self):
+        def go():
+            self.discard_session()
+            self.screens["StartScreen"].reset()
+            self.show("StartScreen")
+        self.guard_unsaved(go)
+
+    def request_exit(self):
+        self.guard_unsaved(self._quit_now)
+
+    def _quit_now(self):
+        self._closing = True
+        for scr in self.screens.values():
+            scr.cancel_timers()
+        try:
+            self.feed.stop()
+        finally:
+            if self.session:
+                self.session.cleanup()
+            self.destroy()
+
 
 class Screen(tk.Frame):
     def __init__(self, parent, app: App):
@@ -273,6 +334,10 @@ class Screen(tk.Frame):
 
     def on_show(self): ...
     def on_key(self, e): ...
+    def cancel_timers(self):
+        if self._flash_id:
+            self.after_cancel(self._flash_id)
+            self._flash_id = None
 
     def flash(self, text, color=GREEN, ms=3500):
         self.toast.config(text=text, fg=color)
@@ -309,40 +374,87 @@ class Screen(tk.Frame):
 class StartScreen(Screen):
     def __init__(self, parent, app):
         super().__init__(parent, app)
+        c = app.compact
         box = tk.Frame(self, bg=BG)
-        box.place(relx=0.5, rely=0.46, anchor="center")
-        tk.Label(box, text="New scanning session", bg=BG, fg=FG, font=app.f(24, True)
-                 ).pack(pady=(0, 6))
-        tk.Label(box, text="One folder per drawer. Name it, then start scanning.",
-                 bg=BG, fg=MUTED, font=app.f(12)).pack(pady=(0, 22))
-        self.name = tk.StringVar(value=time.strftime("Drawer_%Y%m%d_%H%M"))
-        tk.Entry(box, textvariable=self.name, font=app.f(16), justify="center",
-                 bg=PANEL2, fg=FG, insertbackground=FG, relief="flat", width=26
-                 ).pack(ipady=8, pady=(0, 18))
-        Btn(box, "START", self.start, GREEN, "#06210f", app.f(20, True),
-            padx=70, pady=16).pack(pady=6)
-        Btn(box, "Quit", app.quit_app, PANEL, MUTED, app.f(12), padx=30, pady=8
-            ).pack(pady=(16, 0))
-        self.note = tk.Label(box, text="", bg=BG, fg=AMBER, font=app.f(11),
+        box.place(relx=0.5, rely=0.47, anchor="center")
+        tk.Label(box, text="New drawer", bg=BG, fg=FG, font=app.f(22 if c else 26, True)
+                 ).pack(pady=(0, 4))
+        tk.Label(box, text="Scan every tool for one drawer, then save them all together.",
+                 bg=BG, fg=MUTED, font=app.f(11 if c else 12)).pack(pady=(0, 12 if c else 20))
+
+        tk.Label(box, text="Drawer name", bg=BG, fg=FG, font=app.f(11)).pack(anchor="w")
+        self.name = tk.StringVar()
+        tk.Entry(box, textvariable=self.name, font=app.f(15), justify="left",
+                 bg=PANEL2, fg=FG, insertbackground=FG, relief="flat", width=30
+                 ).pack(ipady=6, pady=(2, 10 if c else 14), fill="x")
+
+        tk.Label(box, text="Save drawers in this toolbox folder", bg=BG, fg=FG,
+                 font=app.f(11)).pack(anchor="w")
+        row = tk.Frame(box, bg=PANEL2)
+        row.pack(fill="x", pady=(2, 4))
+        self.path_lbl = tk.Label(row, text="", bg=PANEL2, fg=GREEN, font=app.f(12),
+                                 anchor="w", padx=10)
+        self.path_lbl.pack(side="left", fill="x", expand=True, pady=6)
+        Btn(row, "Change / new folder", self.change_folder, BLUE, "#ffffff", app.f(11, True),
+            padx=12, pady=4).pack(side="right", padx=6, pady=4)
+        self.final_lbl = tk.Label(box, text="", bg=BG, fg=MUTED, font=app.f(10), anchor="w")
+        self.final_lbl.pack(fill="x")
+
+        Btn(box, "START SCANNING", self.start, GREEN, DARK_GREEN_TEXT, app.f(18, True),
+            padx=50, pady=10 if c else 15).pack(pady=(12 if c else 20, 4), fill="x")
+        Btn(box, "Quit", app.request_exit, PANEL, MUTED, app.f(11), padx=30, pady=5
+            ).pack(pady=(8, 0))
+        self.note = tk.Label(box, text="", bg=BG, fg=AMBER, font=app.f(10),
                              wraplength=int(520 * app.k))
-        self.note.pack(pady=(18, 0))
-        tk.Label(box, text=f"Saved to {config.SESSIONS_DIR}", bg=BG, fg=MUTED,
-                 font=app.f(10)).pack(pady=(4, 0))
+        self.note.pack(pady=(8, 0))
+        self._suggested = ""
+        self.name.trace_add("write", lambda *_: self.update_final())
+        self.reset()
+
+    def reset(self):
+        self._suggested = storage.suggest_drawer_name(self.app.toolbox)
+        self.name.set(self._suggested)
+        self.note.config(text="")
+        self.update_final()
+
+    def update_final(self):
+        tb = self.app.toolbox
+        self.path_lbl.config(text=storage.shorten(tb, 44))
+        self.final_lbl.config(
+            text=f"This drawer will be saved as:  {storage.shorten(tb / storage.folder_name(self.name.get()), 56)}")
 
     def on_show(self):
         if self.app.startup_error:
             self.note.config(text=f"{self.app.startup_error}\nUsing the demo camera instead.")
+        self.update_final()
 
     def on_key(self, e):
         if e.keysym == "Return":
             self.start()
 
+    def change_folder(self):
+        old = self._suggested
+        if self.app.choose_toolbox():
+            if self.name.get() == old:             # user hasn't typed their own name
+                self._suggested = storage.suggest_drawer_name(self.app.toolbox)
+                self.name.set(self._suggested)
+            self.update_final()
+
     def start(self):
+        tb = self.app.toolbox
+        probe = tb
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        if not os.access(probe, os.W_OK):
+            self.note.config(text=f"Can't save into {storage.shorten(tb)}. "
+                                  "Choose a different folder.")
+            return
         try:
             self.app.session = Session(self.name.get())
         except OSError as e:
-            self.note.config(text=f"Could not create the session folder: {e}")
+            self.note.config(text=f"Could not start: {e}")
             return
+        storage.save_settings(toolbox_dir=str(tb))
         self.app.show("ScanScreen")
 
 
@@ -378,7 +490,7 @@ class ScanScreen(Screen):
         self.marker.pack(pady=6 if c else 14)
         self.count = tk.Label(side, text="0", bg=PANEL, fg=FG, font=app.f(28 if c else 40, True))
         self.count.pack()
-        tk.Label(side, text="tools saved", bg=PANEL, fg=MUTED, font=app.f(11)).pack()
+        tk.Label(side, text="tools scanned", bg=PANEL, fg=MUTED, font=app.f(11)).pack()
         self.scan_btn = Btn(side, "SCAN", self.scan, GREEN, "#06210f", app.f(26, True),
                             pady=14 if c else 24)
         self.scan_btn.pack(fill="x", padx=16, pady=(10 if c else 22, 6))
@@ -395,8 +507,14 @@ class ScanScreen(Screen):
         if e.keysym == "space" or e.keysym == "Return":
             self.scan()
 
+    def cancel_timers(self):
+        super().cancel_timers()
+        if getattr(self, "_tick_id", None):
+            self.after_cancel(self._tick_id)
+            self._tick_id = None
+
     def tick(self):
-        if self.app.current != "ScanScreen":
+        if self.app._closing or self.app.current != "ScanScreen":
             return
         f = self.app.feed.latest()
         if f is not None:
@@ -404,7 +522,7 @@ class ScanScreen(Screen):
         ok = self.app.feed.marker_ok
         self.marker.config(text="Marker found" if ok else "Marker NOT found",
                            fg=GREEN if ok else AMBER)
-        self.after(80, self.tick)
+        self._tick_id = self.after(80, self.tick)
 
     def scan(self):
         if self.busy:
@@ -616,7 +734,7 @@ class ReviewScreen(Screen):
             self.app.next_demo_tool()
             self.app.show("ScanScreen")
             self.app.screens["ScanScreen"].flash(
-                f"Saved {rec.name}  ({rec.width_mm:.0f} × {rec.height_mm:.0f} mm)")
+                f"Added {rec.name}  ({rec.width_mm:.0f} × {rec.height_mm:.0f} mm)")
 
         def err(e):
             self._saving = False
@@ -640,97 +758,149 @@ class ReviewScreen(Screen):
 class DoneScreen(Screen):
     def __init__(self, parent, app):
         super().__init__(parent, app)
+        c = app.compact
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
         self.canvas = tk.Canvas(self, bg="#0b0e12", highlightthickness=0)
         self.canvas.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
         self.canvas.bind("<Configure>", lambda e: self.draw_layout())
 
-        side = tk.Frame(self, bg=PANEL, width=int(300 * app.k))
+        side = tk.Frame(self, bg=PANEL, width=int(310 * app.k))
         side.grid(row=0, column=1, sticky="ns", padx=(6, 12), pady=12)
         side.grid_propagate(False)
         side.pack_propagate(False)
+        wrap = int(280 * app.k)
 
-        # Bottom buttons are packed first so they always keep their space.
-        Btn(side, "New session", self.new_session, PANEL2, FG, app.f(12),
-            pady=5 if app.compact else 8).pack(fill="x", padx=16, pady=(4, 10), side="bottom")
-        Btn(side, "Scan more tools", self.back, BLUE, "#ffffff", app.f(13, True),
-            pady=6 if app.compact else 10).pack(fill="x", padx=16, pady=3, side="bottom")
-        self.open_btn = Btn(side, "Open folder", self.open_folder, GREEN, "#06210f",
-                            app.f(14, True), pady=8 if app.compact else 12)
-        self.open_btn.pack(fill="x", padx=16, pady=3, side="bottom")
+        # Bottom buttons live in one holder that is packed first, so small
+        # screens never clip them. Only one of the two button sets shows.
+        holder = tk.Frame(side, bg=PANEL)
+        holder.pack(side="bottom", fill="x", padx=16, pady=(4, 10))
+        self.unsaved_box = tk.Frame(holder, bg=PANEL)
+        self.saved_box = tk.Frame(holder, bg=PANEL)
+        py = 8 if c else 12
+        Btn(self.unsaved_box, "SAVE", self.save, GREEN, DARK_GREEN_TEXT, app.f(20, True),
+            pady=py + 2).pack(fill="x", pady=3)
+        Btn(self.unsaved_box, "Scan more tools", self.back, BLUE, "#ffffff", app.f(12, True),
+            pady=5 if c else 9).pack(fill="x", pady=3)
+        Btn(self.unsaved_box, "Exit", app.request_exit, PANEL2, FG, app.f(11),
+            pady=4 if c else 7).pack(fill="x", pady=3)
 
-        tk.Label(side, text="Shadow-board file", bg=PANEL, fg=FG, font=app.f(15, True)
-                 ).pack(pady=(14, 2))
-        self.summary = tk.Label(side, text="", bg=PANEL, fg=GREEN, font=app.f(12, True))
+        self.saved_msg = tk.Label(self.saved_box, text="", bg=PANEL, fg=GREEN,
+                                  font=app.f(13, True), wraplength=wrap, justify="left")
+        self.saved_msg.pack(anchor="w", pady=(0, 4))
+        Btn(self.saved_box, "Open folder", self.open_saved, GREEN, DARK_GREEN_TEXT,
+            app.f(14, True), pady=py).pack(fill="x", pady=3)
+        self.usb_box = tk.Frame(self.saved_box, bg=PANEL)
+        self.usb_box.pack(fill="x")
+        row = tk.Frame(self.saved_box, bg=PANEL)
+        row.pack(fill="x", pady=3)
+        Btn(row, "New drawer", app.new_drawer, BLUE, "#ffffff", app.f(11, True),
+            pady=5 if c else 8).pack(side="left", fill="x", expand=True, padx=(0, 3))
+        Btn(row, "Exit app", app.request_exit, PANEL2, FG, app.f(11, True),
+            pady=5 if c else 8).pack(side="left", fill="x", expand=True, padx=(3, 0))
+
+        tk.Label(side, text="Save your drawer", bg=PANEL, fg=FG,
+                 font=app.f(14 if c else 15, True)).pack(pady=(10 if c else 14, 0))
+        self.summary = tk.Label(side, text="", bg=PANEL, fg=GREEN, font=app.f(11, True))
         self.summary.pack()
         self.size_lbl = tk.Label(side, text="", bg=PANEL, fg=MUTED, font=app.f(10))
-        self.size_lbl.pack(pady=(0, 8))
+        self.size_lbl.pack(pady=(0, 4))
 
-        self.gap = Stepper(app, side, "Gap" if app.compact else "Space between tools", config.DEFAULT_TOOL_GAP_MM,
-                           2.5, 0, 60, "{:.1f} mm", lambda v: self.changed())
-        self.gap.pack(fill="x", padx=16, pady=4)
+        self.gap = Stepper(app, side, "Gap" if c else "Space between tools",
+                           config.DEFAULT_TOOL_GAP_MM, 2.5, 0, 60, "{:.1f} mm",
+                           lambda v: self.layout_changed())
+        self.gap.pack(fill="x", padx=16, pady=2)
         self.rows_on = False
         self.mode_btn = Btn(side, "Layout: one column", self.toggle_mode, PANEL2, FG,
-                            app.f(11), pady=6)
-        self.mode_btn.pack(fill="x", padx=16, pady=(8, 2))
-        self.width_step = Stepper(app, side, "Max width" if app.compact else "Max width (rows mode)", 600, 50, 100, 2000,
-                                  "{:.0f} mm", lambda v: self.changed())
-        self.width_step.pack(fill="x", padx=16, pady=4)
-        self.width_step.pack_forget()
+                            app.f(10), pady=3 if c else 6)
+        self.mode_btn.pack(fill="x", padx=16, pady=(4, 2))
+        self.width_step = Stepper(app, side, "Max width" if c else "Max width (rows mode)",
+                                  600, 50, 100, 2000, "{:.0f} mm",
+                                  lambda v: self.layout_changed())
 
-        self.status = tk.Label(side, text="", bg=PANEL, fg=MUTED, font=app.f(10),
-                               wraplength=int(270 * app.k), justify="left")
-        self.status.pack(padx=14, pady=10, anchor="w")
+        tk.Label(side, text="Save to:", bg=PANEL, fg=MUTED, font=app.f(10), anchor="w"
+                 ).pack(fill="x", padx=16, pady=(8, 0))
+        self.dest_lbl = tk.Label(side, text="", bg=PANEL, fg=FG, font=app.f(10, True),
+                                 wraplength=wrap, justify="left", anchor="w")
+        self.dest_lbl.pack(fill="x", padx=16)
+        Btn(side, "Change folder", self.change_folder, PANEL2, FG, app.f(10),
+            pady=3 if c else 5).pack(fill="x", padx=16, pady=(4, 0))
+        self._saved_path: Path | None = None
 
-        self._debounce = None
-        self._path = None
+    # --- state -----------------------------------------------------------
 
     def on_show(self):
-        n = len(self.app.session.tools)
+        s = self.app.session
+        n = len(s.tools)
         self.summary.config(text=f"{n} tool{'s' if n != 1 else ''}")
-        self.gap.set(self.app.session.gap_mm)
-        self.export_now()
+        self.gap.set(s.gap_mm)
+        if s.max_width_mm:
+            self.rows_on = True
+            self.width_step.set(s.max_width_mm)
+        self.sync_mode_widgets()
+        self.update_dest()
+        self.draw_layout()
+        if s.saved_to and not s.dirty:
+            self.show_saved()
+        else:
+            self.show_unsaved()
 
-    def toggle_mode(self):
-        self.rows_on = not self.rows_on
+    def update_dest(self):
+        self.dest_lbl.config(text=storage.shorten(self.app.destination(), 140))
+
+    def show_unsaved(self):
+        self.saved_box.pack_forget()
+        self.unsaved_box.pack(fill="x")
+        self.update_dest()
+
+    def show_saved(self):
+        s = self.app.session
+        self._saved_path = s.saved_to
+        self.saved_msg.config(
+            text=f"Everything is saved.\n{storage.shorten(s.saved_to, 140)}\n"
+                 "It's safe to exit.")
+        for w in self.usb_box.winfo_children():
+            w.destroy()
+        for drive in storage.find_usb_drives()[:2]:
+            Btn(self.usb_box, f"Copy to USB: {drive.name[:16]}",
+                (lambda d=drive: self.copy_usb(d)), BLUE, "#ffffff",
+                self.app.f(11, True), pady=5 if self.app.compact else 8
+                ).pack(fill="x", pady=3)
+        self.unsaved_box.pack_forget()
+        self.saved_box.pack(fill="x")
+        self.update_dest()
+        self.app.refresh_header()
+
+    # --- layout controls ---------------------------------------------------
+
+    def sync_mode_widgets(self):
         self.mode_btn.config(text="Layout: wrap into rows" if self.rows_on
                              else "Layout: one column")
         if self.rows_on:
-            self.width_step.pack(fill="x", padx=16, pady=4, after=self.mode_btn)
+            self.width_step.pack(fill="x", padx=16, pady=2, after=self.mode_btn)
         else:
             self.width_step.pack_forget()
-        self.changed()
 
-    def _args(self):
-        return self.gap.value, (self.width_step.value if self.rows_on else None)
+    def toggle_mode(self):
+        self.rows_on = not self.rows_on
+        self.sync_mode_widgets()
+        self.layout_changed()
 
-    def changed(self):
+    def layout_changed(self):
+        s = self.app.session
+        s.gap_mm = self.gap.value
+        s.max_width_mm = self.width_step.value if self.rows_on else None
+        s.dirty = bool(s.tools)            # a saved copy is now out of date
         self.draw_layout()
-        if self._debounce:
-            self.after_cancel(self._debounce)
-        self._debounce = self.after(400, self.export_now)
-
-    def export_now(self):
-        gap, max_w = self._args()
-        session = self.app.session
-        self.status.config(text="Saving…", fg=MUTED)
-
-        def ok(path):
-            self._path = path
-            self.status.config(text=f"Saved:\n{path}", fg=GREEN)
-            self.draw_layout()
-
-        self.app.run_bg(lambda: session.export_combined(gap, max_w), ok,
-                        lambda e: self.status.config(text=f"Could not save: {e}", fg=RED))
+        self.show_unsaved()
+        self.app.refresh_header()
 
     def draw_layout(self):
         s = self.app.session
         if not s or not s.tools:
             return
-        gap, max_w = self._args()
-        placements, W, H = s.layout(gap, max_w)
-        self.size_lbl.config(text=f"Overall size {W:.0f} × {H:.0f} mm")
+        placements, W, H = s.layout(s.gap_mm, s.max_width_mm)
+        self.size_lbl.config(text=f"Overall size {W:.0f} x {H:.0f} mm")
         c = self.canvas
         c.delete("all")
         cw, ch = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
@@ -746,19 +916,41 @@ class DoneScreen(Screen):
                 if len(pts) >= 6:
                     c.create_polygon(pts, fill="#1e5a3a", outline=GREEN, width=1)
             c.create_text(ox + (p.x_mm + 2) * k, oy + (p.y_mm + 2) * k,
-                          text=p.tool.name, anchor="nw", fill=FG,
-                          font=self.app.f(9))
+                          text=p.tool.name, anchor="nw", fill=FG, font=self.app.f(9))
 
-    def open_folder(self):
-        self.app.open_folder(self.app.session.folder)
+    # --- actions -----------------------------------------------------------
+
+    def save(self):
+        self.app.save_session()
+
+    def change_folder(self):
+        if self.app.choose_toolbox():
+            self.show_unsaved()
+            self.update_dest()
 
     def back(self):
         self.app.show("ScanScreen")
 
-    def new_session(self):
-        self.app.session = None
-        self.app.screens["StartScreen"].name.set(time.strftime("Drawer_%Y%m%d_%H%M"))
-        self.app.show("StartScreen")
+    def open_saved(self):
+        if self._saved_path:
+            self.app.open_folder(self._saved_path)
+
+    def copy_usb(self, drive: Path):
+        src = self._saved_path
+        if not src:
+            return
+        self.flash(f"Copying to {drive.name}...", MUTED, 30000)
+
+        def work():
+            storage.copy_drawer(src, drive / src.name, replace=True)
+            os.sync()
+            return drive / src.name
+
+        self.app.run_bg(
+            work,
+            lambda d: self.flash(f"Copied to USB '{drive.name}'. Eject it from the taskbar "
+                                 "before unplugging.", GREEN, 9000),
+            lambda e: self.flash(f"USB copy failed: {e}", RED, 9000))
 
 
 # ---------------------------------------------------------------------------
@@ -770,6 +962,7 @@ def main():
     ap.add_argument("--folder", metavar="DIR", help="use photos from a folder as the camera")
     args = ap.parse_args()
     kind = "demo" if args.demo else "folder" if args.folder else "auto"
+    sys.excepthook = lambda t, v, tb: storage.log_error("".join(traceback.format_exception(t, v, tb)))
     App(touch=args.touch, camera_kind=kind, folder=args.folder).mainloop()
 
 

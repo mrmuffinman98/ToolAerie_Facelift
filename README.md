@@ -63,35 +63,52 @@ SVG output is written to `output/`.
 
 A point-and-confirm app for scanning a whole drawer of tools in one sitting.
 
-```bash
-./run_desktop.sh            # normal window
-./run_touch.sh              # fullscreen, big buttons, for the Pi touchscreen
-python app.py --demo        # fake camera, no hardware needed
-python app.py --folder DIR  # use photos from a folder instead of the camera
-```
+**Start it**
 
-**Flow:** Start → *Scan* → review the outline over the photo → *Confirm* (or *Retake*) →
-next tool … → *Finish*.
+- Double-click the **Tool Aerie Scanner** icon on the desktop (set up once with
+  `bash install_launcher.sh` from inside this folder, after the venv exists).
+- Or from a terminal: `python app.py` (add `--demo` for a fake camera,
+  `--touch` for the fullscreen touchscreen layout).
 
-- The review screen shows the tool's real size and lets you adjust clearance,
-  edge threshold and speck filter; the outline updates live.
+**Flow:** Start (name the drawer, pick the toolbox folder) → *Scan* → review the outline
+over the photo → *Confirm* or *Retake* → next tool … → *Finish* → *Save*.
+
+- The review screen shows the tool's real size and lets you adjust clearance, edge
+  threshold and speck filter; the outline updates live.
 - Desktop shortcuts: `Space` scans / confirms, `R` or `Backspace` retakes.
-- *Finish* lays every confirmed tool out in one SVG, stacked in a column (or wrapped
-  into rows) with an adjustable gap, at real size (1 SVG unit = 1 mm).
-- Needs `python3-tk` (preinstalled with Raspberry Pi OS desktop).
+- Scanning happens in a temporary scratch folder. **Nothing is written to your toolbox
+  folder until you press Save**, and the app then says "Everything is saved" with the
+  full path.
+- Closing the app (or starting a new drawer) with unsaved tools asks you to
+  **Save**, **Delete project**, or **Cancel**.
+- *Open folder* shows the saved files in the file manager; *Copy to USB* appears when a
+  USB stick is plugged in (eject it from the taskbar before unplugging).
+- The toolbox folder you pick is remembered for next time. The Start screen's
+  *Change / new folder* button can create new folders, e.g. `Tomas's car toolbox`.
 
-Each session is a folder in `~/ToolAerie` (change `SESSIONS_DIR` in `config.py`):
+**What gets saved** (default location `~/Desktop/ToolAerie`):
 
 ```
-Drawer_20261024_1313/
-├── Drawer_20261024_1313_combined.svg   ← all tools, ready for the laser software
-├── tools/tool_01.svg ...               ← one real-size SVG per tool
-├── photos/tool_01.jpg ...              ← the photo each outline came from
-└── session.json
+Tomas's car toolbox/
+└── Drawer 1/
+    ├── Drawer_1_combined.svg   <- all tools, real size, ready for the laser software
+    ├── tools/tool_01.svg ...   <- one real-size SVG per tool
+    ├── photos/tool_01.jpg ...  <- the photo each outline came from
+    └── session.json
 ```
 
-Code: `app.py` (screens), `scan_service.py` (scan + review overlay),
-`session.py` (saving + combined layout), `camera.py` (Pi camera, demo camera).
+The combined SVG stacks the tools in one column (or wraps them into rows) with an
+adjustable gap, and uses 1 SVG unit = 1 mm.
+
+If the app won't start from the icon it shows the error in a message box; details are
+also written to `~/.cache/toolaerie/app.log`.
+
+Needs `python3-tk` (preinstalled with Raspberry Pi OS desktop).
+
+Code: `app.py` (screens), `ui.py` (buttons, dialogs, folder picker), `scan_service.py`
+(scan + review overlay), `session.py` (drawer + combined layout), `storage.py` (save
+locations, safe copy, USB), `camera.py` (Pi camera, demo camera), `launch.py` (icon
+entry point).
 
 ## Tests
 
