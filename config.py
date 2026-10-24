@@ -135,3 +135,21 @@ DEFAULT_TOOL_GAP_MM = 10.0
 
 # Empty margin around the edge of the combined SVG, in millimetres.
 COMBINED_MARGIN_MM = 5.0
+
+# Version numbers written into each saved drawer (see FORMAT.md). Bump
+# MANIFEST_SCHEMA_VERSION whenever the layout of drawer.json changes.
+APP_VERSION = "0.2.0"
+MANIFEST_SCHEMA_VERSION = 1
+
+# ---------------------------------------------------------------------------
+# Auto-scan (autoscan.py): hands-free scanning when a tool is placed and still.
+# Tune these if it triggers too eagerly or not at all with your light board.
+# ---------------------------------------------------------------------------
+
+AUTOSCAN_DROP = 35            # how much darker than the empty board a pixel must be (0-255)
+AUTOSCAN_PRESENT_FRAC = 0.0015  # fraction of the picture that must be darker to count as a tool
+AUTOSCAN_EMPTY_FRAC = 0.0005    # below this the board counts as empty
+AUTOSCAN_STABLE_SECS = 1.0    # picture must hold still this long before scanning
+AUTOSCAN_STILL_LEVEL = 1.5    # "holding still" = average change below this (0-255 scale)
+AUTOSCAN_LEARN_SECS = 1.2     # time spent learning the empty board
+AUTOSCAN_CLEAR_SECS = 0.8     # board must be empty this long before re-arming

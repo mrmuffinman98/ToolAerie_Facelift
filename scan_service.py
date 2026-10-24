@@ -60,10 +60,11 @@ class ScanError(Exception):
 class ScanResult:
     prepared: np.ndarray            # undistorted + cropped BGR photo
     mask: np.ndarray                # uint8, tool = 255
-    outlines: list[np.ndarray]      # list of (N, 2) float arrays, pixel coords
+    outlines: list[np.ndarray]      # list of (N, 2) float arrays, pixel coords (with clearance)
     pixels_per_mm: float
     settings: Settings
     marker_corners: np.ndarray      # (4, 2)
+    raw_outlines: list[np.ndarray] = field(default_factory=list)  # same, WITHOUT clearance
     width_mm: float = 0.0           # overall bounding box of the tool
     height_mm: float = 0.0
     warnings: list[str] = field(default_factory=list)
@@ -151,7 +152,7 @@ def analyze(prepared: np.ndarray, settings: Settings | None = None) -> ScanResul
     quiet = io.StringIO()  # process.py prints progress; keep the console clean
     try:
         with _config_overrides(s), contextlib.redirect_stdout(quiet):
-            mask, _contours, ppm = process.extract_silhouette(prepared)
+            mask, contours, ppm = process.extract_silhouette(prepared)
             marker = process.detect_scale(prepared)[1]
     except RuntimeError as e:
         raise ScanError(_friendly(str(e))) from e
@@ -169,7 +170,11 @@ def analyze(prepared: np.ndarray, settings: Settings | None = None) -> ScanResul
     w_mm = float(np.ptp(allpts[:, 0])) / ppm
     h_mm = float(np.ptp(allpts[:, 1])) / ppm
 
-    result = ScanResult(prepared, mask, outlines, ppm, s, marker, w_mm, h_mm)
+    # The true tool shape, before clearance: what the board builder works from.
+    raw = [c.reshape(-1, 2).astype(np.float64) for c in contours
+           if cv2.contourArea(c) >= s.min_area_px]
+    result = ScanResult(prepared, mask, outlines, ppm, s, marker,
+                        raw_outlines=raw or outlines, width_mm=w_mm, height_mm=h_mm)
     result.warnings = _quality_warnings(result)
     return result
 

@@ -15,6 +15,7 @@ import re
 import shutil
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 import config
@@ -124,7 +125,7 @@ def remove_tree(path: Path) -> None:
 # The only things the app ever creates inside a saved drawer folder. When a
 # drawer is saved over an older copy, only these are replaced, so any other
 # files the user put in that folder are left alone.
-_APP_ITEMS = ("tools", "photos", "session.json")
+_APP_ITEMS = ("tools", "photos", "drawer.json", "session.json")  # session.json: older versions
 
 
 def is_nonempty_dir(path: Path) -> bool:
@@ -146,11 +147,25 @@ def copy_drawer(src: Path, dest: Path, replace: bool = False) -> Path:
                 shutil.rmtree(t)
             elif t.exists():
                 t.unlink()
-        for f in dest.glob("*_combined.svg"):
-            f.unlink()
+        for pattern in ("*_combined.svg", "*.toolaerie"):
+            for f in dest.glob(pattern):
+                f.unlink()
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copytree(src, dest, dirs_exist_ok=True)
     return dest
+
+
+def make_package(folder: Path, out: Path) -> Path:
+    """Zip a drawer folder into one .toolaerie file (drawer.json sits at the top).
+
+    Earlier .toolaerie files inside the folder are left out of the new one.
+    """
+    folder, out = Path(folder), Path(out)
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(folder.rglob("*")):
+            if f.is_file() and f.suffix != ".toolaerie":
+                z.write(f, f.relative_to(folder).as_posix())
+    return out
 
 
 def find_usb_drives() -> list[Path]:

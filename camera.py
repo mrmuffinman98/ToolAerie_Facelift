@@ -139,17 +139,45 @@ class DemoCamera(BaseCamera):
         self._rng = np.random.default_rng(seed)
         self._kind = 0
         self._cache: np.ndarray | None = None
+        self._noise: list | None = None
+        self._noise_i = 0
+        self.tool_visible = True
+        self.auto_cycle = False          # simulate lifting a tool and placing the next
+        self._appear_at: float | None = None
 
     def next_tool(self) -> None:
         self._kind += 1
         self._cache = None
+        if self.auto_cycle:              # tool is picked up; next one arrives in a bit
+            self.set_tool_visible(False, appear_after=3.0)
+
+    def set_auto_cycle(self, on: bool) -> None:
+        """Demo of auto-scan: start from an empty board, then a tool is 'placed'."""
+        self.auto_cycle = on
+        if on:
+            self.set_tool_visible(False, appear_after=2.5)
+        else:
+            self.set_tool_visible(True)
+
+    def set_tool_visible(self, visible: bool, appear_after: float | None = None) -> None:
+        self.tool_visible = visible
+        self._appear_at = (time.time() + appear_after) if appear_after is not None else None
+        self._cache = None
 
     def frame(self) -> np.ndarray:
+        if (not self.tool_visible and self._appear_at is not None
+                and time.time() >= self._appear_at):
+            self.tool_visible, self._appear_at, self._cache = True, None, None
         if self._cache is None:
             self._cache = self._render(self._kind)
-        # Fresh sensor noise on every call, like a real camera.
-        noise = self._rng.normal(0, 2.0, self._cache.shape)
-        return np.clip(self._cache + noise, 0, 255).astype(np.uint8)
+        # Sensor noise like a real camera: cycle through a few pre-made noise
+        # frames (making fresh random numbers for 3 million pixels is slow).
+        if self._noise is None:
+            self._noise = [self._rng.integers(-4, 5, size=self._cache.shape, dtype=np.int8)
+                           for _ in range(3)]
+        self._noise_i = (self._noise_i + 1) % len(self._noise)
+        return np.clip(self._cache.astype(np.int16) + self._noise[self._noise_i],
+                       0, 255).astype(np.uint8)
 
     # --- scene drawing ---------------------------------------------------
 
@@ -176,7 +204,8 @@ class DemoCamera(BaseCamera):
         tool = np.zeros((h, w), np.uint8)
         cx, cy = int(w * 0.55), int(h * 0.46)
         shapes = (self._wrench, self._screwdriver, self._pliers, self._socket)
-        shapes[kind % len(shapes)](tool, cx, cy, ppm)
+        if self.tool_visible:
+            shapes[kind % len(shapes)](tool, cx, cy, ppm)
         img = np.where(tool[..., None] > 0, (46, 44, 42), img).astype(np.uint8)
         return cv2.GaussianBlur(img, (3, 3), 0)
 

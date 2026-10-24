@@ -75,6 +75,10 @@ over the photo → *Confirm* or *Retake* → next tool … → *Finish* → *Sav
 
 - The review screen shows the tool's real size and lets you adjust clearance, edge
   threshold and speck filter; the outline updates live.
+- **Auto-scan** (button on the scan screen, remembered between runs): place a tool, hold
+  it still for a second and the app scans by itself. It waits for you to lift the tool
+  before arming again, so nothing is scanned twice. Tune it in `config.py`
+  (`AUTOSCAN_*`). With `--demo` it simulates tools being placed so you can try it.
 - Desktop shortcuts: `Space` scans / confirms, `R` or `Backspace` retakes.
 - Scanning happens in a temporary scratch folder. **Nothing is written to your toolbox
   folder until you press Save**, and the app then says "Everything is saved" with the
@@ -91,11 +95,16 @@ over the photo → *Confirm* or *Retake* → next tool … → *Finish* → *Sav
 ```
 Tomas's car toolbox/
 └── Drawer 1/
-    ├── Drawer_1_combined.svg   <- all tools, real size, ready for the laser software
+    ├── Drawer 1.toolaerie      <- everything in ONE file (zip): upload this to the board builder
+    ├── Drawer_1_combined.svg   <- all tools, real size, ready for Illustrator / LightBurn
+    ├── drawer.json             <- measurements and true outlines for the board builder
     ├── tools/tool_01.svg ...   <- one real-size SVG per tool
-    ├── photos/tool_01.jpg ...  <- the photo each outline came from
-    └── session.json
+    └── photos/tool_01.jpg ...  <- the photo each outline came from
 ```
+
+`drawer.json` also records each tool's long-axis angle, length and width, and whether
+head vs handle can be told apart, plus the outline with no clearance added. The exact
+format is in [FORMAT.md](FORMAT.md).
 
 The combined SVG stacks the tools in one column (or wraps them into rows) with an
 adjustable gap, and uses 1 SVG unit = 1 mm.
@@ -105,7 +114,8 @@ also written to `~/.cache/toolaerie/app.log`.
 
 Needs `python3-tk` (preinstalled with Raspberry Pi OS desktop).
 
-Code: `app.py` (screens), `ui.py` (buttons, dialogs, folder picker), `scan_service.py`
+Code: `app.py` (screens), `autoscan.py` (hands-free scanning), `shape_info.py`
+(outline measurements), `ui.py` (buttons, dialogs, folder picker), `scan_service.py`
 (scan + review overlay), `session.py` (drawer + combined layout), `storage.py` (save
 locations, safe copy, USB), `camera.py` (Pi camera, demo camera), `launch.py` (icon
 entry point).

@@ -7,7 +7,8 @@
 #       photos/tool_01.jpg ...      the prepared photo of each confirmed tool
 #       tools/tool_01.svg ...       one real-size SVG per tool
 #       <session name>_combined.svg all tools laid out in one file, with gaps
-#       session.json                names, sizes, settings (for re-exporting)
+#       <drawer name>.toolaerie     everything above in ONE file (zip) for the board builder
+#       drawer.json                 manifest: geometry + measurements, see FORMAT.md
 #
 # The combined SVG uses millimetres as its user unit and real-world
 # width/height, so it opens at 1:1 in Illustrator, Inkscape, LightBurn, etc.
@@ -17,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -26,6 +28,7 @@ import cv2
 import config
 import export
 import scan_service
+import shape_info
 import storage
 
 _SVG_NS = "http://www.w3.org/2000/svg"
@@ -46,6 +49,11 @@ class ToolRecord:
     width_mm: float          # size of the SVG canvas (tool + small padding)
     height_mm: float
     pixels_per_mm: float
+    uid: str = ""            # stable id, survives renames and re-saves
+    clearance_mm: float = 0.0        # clearance baked into the SVG file
+    geometry: dict = field(default_factory=dict)   # shape_info.analyze_shape(): no clearance
+    warnings: list = field(default_factory=list)
+    scanned: str = ""
     # Outline in mm relative to the SVG canvas origin; used for the layout
     # preview only, not for the cut file.
     preview_outlines_mm: list = field(default_factory=list, repr=False)
@@ -81,8 +89,11 @@ class Session:
         self.tools: list[ToolRecord] = []
         self.gap_mm = float(config.DEFAULT_TOOL_GAP_MM)
         self.max_width_mm: float | None = None   # None = one column
+        self.created = time.strftime("%Y-%m-%d %H:%M:%S")
         self.dirty = False                   # unsaved work?
         self.saved_to: Path | None = None
+        self.toolbox_name: str | None = None
+        self.saved_at: str | None = None
         self._save_manifest()
 
     def cleanup(self) -> None:
@@ -116,7 +127,13 @@ class Session:
 
         rec = ToolRecord(idx, tool_name, str(Path(svg_path).relative_to(self.folder)),
                          str(photo.relative_to(self.folder)),
-                         w_px / ppm, h_px / ppm, ppm, preview)
+                         w_px / ppm, h_px / ppm, ppm,
+                         uid=uuid.uuid4().hex[:12],
+                         clearance_mm=result.settings.offset_mm,
+                         geometry=shape_info.analyze_shape(result.raw_outlines, ppm),
+                         warnings=list(result.warnings),
+                         scanned=time.strftime("%Y-%m-%d %H:%M:%S"),
+                         preview_outlines_mm=preview)
         self.tools.append(rec)
         self.dirty = True
         self._save_manifest()
@@ -195,34 +212,74 @@ class Session:
                 })
         out = self.folder / f"{self.name}_combined.svg"
         ET.ElementTree(root).write(out, xml_declaration=True, encoding="unicode")
-        self._save_manifest(max_width_mm=max_width_mm)
+        self.max_width_mm = max_width_mm
+        self._save_manifest(combined=out.name)
         return out
 
     def save_to(self, dest: str | Path, replace: bool = False) -> Path:
-        """Write the combined SVG, then copy the whole drawer to dest.
+        """Write the combined SVG and the .toolaerie package, then copy the whole
+        drawer to dest.
 
         Returns the path of the saved combined SVG inside dest. Marks the
         session as saved only after the copy has completed and been checked.
         """
         dest = Path(dest)
+        self.toolbox_name = dest.parent.name
+        self.saved_at = time.strftime("%Y-%m-%d %H:%M:%S")
         combined = self.export_combined(self.gap_mm, self.max_width_mm)
+        package = self.write_package()
         storage.copy_drawer(self.folder, dest, replace=replace)
-        saved_file = dest / combined.name
-        if not saved_file.exists() or saved_file.stat().st_size != combined.stat().st_size:
-            raise OSError(f"The saved file could not be verified in {dest}")
+        for made in (combined, package):
+            copy = dest / made.name
+            if not copy.exists() or copy.stat().st_size != made.stat().st_size:
+                raise OSError(f"{made.name} could not be verified in {dest}")
         self.saved_to = dest
         self.dirty = False
-        return saved_file
+        return dest / combined.name
+
+    def write_package(self) -> Path:
+        """Zip the drawer into <Drawer name>.toolaerie (one file to move around)."""
+        for old in self.folder.glob("*.toolaerie"):
+            old.unlink()
+        out = self.folder / f"{self.title}.toolaerie"
+        storage.make_package(self.folder, out)
+        return out
 
     # --- bookkeeping -----------------------------------------------------
 
     def _save_manifest(self, **extra) -> None:
+        """drawer.json: the hand-off file for the board builder (see FORMAT.md)."""
+        tools = []
+        for t in self.tools:
+            tools.append({
+                "id": t.uid,
+                "index": t.index,
+                "name": t.name,
+                "files": {"svg": t.svg_file, "photo": t.photo_file},
+                "scale_px_per_mm": round(t.pixels_per_mm, 4),
+                "clearance_mm_in_svg": t.clearance_mm,
+                "svg_size_mm": [round(t.width_mm, 3), round(t.height_mm, 3)],
+                "geometry": t.geometry,
+                "warnings": t.warnings,
+                "scanned": t.scanned,
+            })
         data = {
-            "name": self.title,
-            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "gap_mm": self.gap_mm,
-            "tools": [{k: v for k, v in asdict(t).items() if k != "preview_outlines_mm"}
-                      for t in self.tools],
-            **extra,
+            "format": "toolaerie-drawer",
+            "schema_version": config.MANIFEST_SCHEMA_VERSION,
+            "app_version": config.APP_VERSION,
+            "units": "mm",
+            "coordinates": "x right, y down; polygon_mm origin is the tool's bounding-box "
+                           "top-left corner; geometry has NO clearance added",
+            "drawer": {
+                "name": self.title,
+                "toolbox": self.toolbox_name,
+                "created": self.created,
+                "saved": self.saved_at,
+            },
+            "scan": {"marker_size_mm": config.ARUCO_MARKER_SIZE_MM,
+                     "image_resolution": list(config.IMAGE_RESOLUTION)},
+            "layout": {"gap_mm": self.gap_mm, "max_width_mm": self.max_width_mm,
+                       **{k: v for k, v in extra.items() if k == "combined"}},
+            "tools": tools,
         }
-        (self.folder / "session.json").write_text(json.dumps(data, indent=2))
+        (self.folder / "drawer.json").write_text(json.dumps(data, indent=2))

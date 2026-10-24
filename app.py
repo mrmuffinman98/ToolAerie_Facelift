@@ -33,6 +33,7 @@ from tkinter import font as tkfont
 import cv2
 import numpy as np
 
+import autoscan
 import camera as cam_mod
 import config
 import scan_service
@@ -81,6 +82,7 @@ class App(tk.Tk):
         self.settings = Settings()
         self.session: Session | None = None
         self.toolbox: Path = storage.default_toolbox()   # where drawers get saved
+        self.auto_scan: bool = bool(storage.load_settings().get("auto_scan", False))
         self._fonts: dict = {}
         self.startup_error: str | None = None
 
@@ -186,6 +188,12 @@ class App(tk.Tk):
                                              RED, 9000)
         except Exception:
             pass
+
+    def set_auto_scan(self, on: bool):
+        self.auto_scan = on
+        storage.save_settings(auto_scan=on)
+        if isinstance(self.feed.camera, cam_mod.DemoCamera):
+            self.feed.camera.set_auto_cycle(on)    # demo: simulate placing tools
 
     def next_demo_tool(self):
         if isinstance(self.feed.camera, cam_mod.DemoCamera):
@@ -481,6 +489,10 @@ class ScanScreen(Screen):
             ).pack(fill="x", padx=16, pady=(4, 10), side="bottom")
         Btn(side, "Undo last tool", self.undo, PANEL2, FG, app.f(12), pady=5 if c else 8
             ).pack(fill="x", padx=16, pady=4, side="bottom")
+        self.auto_btn = Btn(side, "", self.toggle_auto, PANEL2, FG, app.f(12, True),
+                            pady=5 if c else 8)
+        self.auto_btn.pack(fill="x", padx=16, pady=4, side="bottom")
+        self.autoscan = autoscan.AutoScan()
         tk.Label(side, text="Place the next tool", bg=PANEL, fg=FG,
                  font=app.f(14, True), wraplength=int(250 * app.k)).pack(pady=(10 if c else 16, 2))
         if not c:
@@ -494,10 +506,27 @@ class ScanScreen(Screen):
         self.scan_btn = Btn(side, "SCAN", self.scan, GREEN, "#06210f", app.f(26, True),
                             pady=14 if c else 24)
         self.scan_btn.pack(fill="x", padx=16, pady=(10 if c else 22, 6))
+        self.auto_lbl = tk.Label(side, text="", bg=PANEL, fg=MUTED, font=app.f(10),
+                                 wraplength=int(250 * app.k), justify="center")
+        self.auto_lbl.pack(padx=12, pady=(2, 0))
         self.busy = False
+
+    def update_auto_button(self):
+        on = self.app.auto_scan
+        self.auto_btn.config(text="Auto-scan: ON" if on else "Auto-scan: OFF",
+                             bg=GREEN if on else PANEL2, fg=DARK_GREEN_TEXT if on else FG)
+        self.auto_btn._color = GREEN if on else PANEL2
+        if not on:
+            self.auto_lbl.config(text="")
+
+    def toggle_auto(self):
+        self.app.set_auto_scan(not self.app.auto_scan)
+        self.autoscan.reset()                    # re-learn the empty board
+        self.update_auto_button()
 
     def on_show(self):
         self.busy = False
+        self.update_auto_button()
         self.scan_btn.config(text="SCAN")
         self.scan_btn.set_enabled(True)
         self.count.config(text=str(len(self.app.session.tools)))
@@ -522,6 +551,12 @@ class ScanScreen(Screen):
         ok = self.app.feed.marker_ok
         self.marker.config(text="Marker found" if ok else "Marker NOT found",
                            fg=GREEN if ok else AMBER)
+        if self.app.auto_scan and f is not None:
+            fire = self.autoscan.update(f, ok, time.time()) and not self.busy
+            self.auto_lbl.config(text=self.autoscan.status_text(ok),
+                                 fg=GREEN if self.autoscan.state == autoscan.READY else AMBER)
+            if fire:
+                self.scan()
         self._tick_id = self.after(80, self.tick)
 
     def scan(self):
@@ -532,7 +567,8 @@ class ScanScreen(Screen):
             self.flash("Camera not ready yet.", AMBER)
             return
         self.busy = True
-        self.scan_btn.config(text="Scanning…")
+        self.autoscan.after_scan()             # don't re-scan this tool automatically
+        self.scan_btn.config(text="Scanning...")
         self.scan_btn.set_enabled(False)
         settings = self.app.settings
 
@@ -785,9 +821,13 @@ class DoneScreen(Screen):
         Btn(self.unsaved_box, "Exit", app.request_exit, PANEL2, FG, app.f(11),
             pady=4 if c else 7).pack(fill="x", pady=3)
 
-        self.saved_msg = tk.Label(self.saved_box, text="", bg=PANEL, fg=GREEN,
-                                  font=app.f(13, True), wraplength=wrap, justify="left")
-        self.saved_msg.pack(anchor="w", pady=(0, 4))
+        self.saved_msg = tk.Label(self.saved_box, text="Everything is saved.\nIt's safe to exit.",
+                                  bg=PANEL, fg=GREEN, font=app.f(12 if c else 13, True),
+                                  wraplength=wrap, justify="left")
+        self.saved_msg.pack(anchor="w", pady=(0, 2))
+        self.saved_path = tk.Label(self.saved_box, text="", bg=PANEL, fg=GREEN,
+                                   font=app.f(9 if c else 10), wraplength=wrap, justify="left")
+        self.saved_path.pack(anchor="w", pady=(0, 4))
         Btn(self.saved_box, "Open folder", self.open_saved, GREEN, DARK_GREEN_TEXT,
             app.f(14, True), pady=py).pack(fill="x", pady=3)
         self.usb_box = tk.Frame(self.saved_box, bg=PANEL)
@@ -856,9 +896,8 @@ class DoneScreen(Screen):
     def show_saved(self):
         s = self.app.session
         self._saved_path = s.saved_to
-        self.saved_msg.config(
-            text=f"Everything is saved.\n{storage.shorten(s.saved_to, 140)}\n"
-                 "It's safe to exit.")
+        self.saved_path.config(
+            text=f"{storage.shorten(s.saved_to, 140)}\nOne-file copy: {s.title}.toolaerie")
         for w in self.usb_box.winfo_children():
             w.destroy()
         for drive in storage.find_usb_drives()[:2]:
