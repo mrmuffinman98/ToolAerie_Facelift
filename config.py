@@ -47,7 +47,7 @@ LENS_POSITION = 8.0
 # Measure these values after running undistortion on a test frame.
 # ---------------------------------------------------------------------------
 
-CROP_BOUNDS = (0, 0, 2304, 1296)  # Full frame — no cropping
+CROP_BOUNDS = (200, 0, 2004, 1096)  # Full frame — no cropping
 
 # ---------------------------------------------------------------------------
 # ArUco scale detection
@@ -103,7 +103,7 @@ CONTOUR_MIN_AREA = 2000
 # Uniform outward expansion applied to the tool silhouette before vectorizing.
 # Adds wiggle room so the tool drops into the foam insert easily.
 # Increase if tools fit too snugly; decrease if cutouts look too loose.
-OUTLINE_OFFSET_MM = 1.5
+OUTLINE_OFFSET_MM = 0
 
 # ---------------------------------------------------------------------------
 # Output
