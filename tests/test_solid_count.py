@@ -161,3 +161,38 @@ def test_steps_can_be_turned_off(tmp_path, monkeypatch):
     _quiet(s.add_scan, r, "")
     assert not (s.folder / "steps").exists()
     assert list((s.folder / "masks").iterdir())               # final masks are always kept
+
+
+def test_builder_outline_comes_from_the_final_traced_svg(tmp_path, monkeypatch):
+    """polygon_mm must be the saved outlines/*.svg (vtracer + export), read back."""
+    import re
+    import export
+    import svg_geometry
+    monkeypatch.setattr(config, "WORK_DIR", str(tmp_path / "work"))
+    img = ss.prepare(_two_tool_frame())
+    r = _quiet(ss.analyze, img, ss.Settings(expected=2, offset_mm=1.5))
+    s = Session("Drawer", root=str(tmp_path))
+    recs = _quiet(s.add_scan, r, "")
+    for rec in recs:
+        g = rec.geometry
+        assert g["source"].startswith("final traced svg")
+        assert abs(g["trace_edge_shift_mm"]) < 0.3
+        # read the saved file back from disk and rebuild the polygon: must be the same shape
+        svg = (s.folder / rec.outline_file).read_text()
+        d = re.search(r'<path[^>]* d="([^"]+)"', svg).group(1)
+        paths = [p.strip() + " Z" for p in re.split(r"Z\s*", d) if p.strip()]
+        rings = svg_geometry.flatten_paths(paths)
+        again = shape_info.analyze_shape(rings, rec.pixels_per_mm,
+                                         simplify_mm=shape_info.TRACE_SIMPLIFY_MM)
+        assert again["polygon_mm"] == g["polygon_mm"]
+        # the laser-ready file keeps the clearance; the outline file does not
+        assert rec.svg_file != rec.outline_file
+        assert g["area_mm2"] < rec.width_mm * rec.height_mm
+
+
+def test_svg_reader_handles_curves_and_lines():
+    import svg_geometry
+    ring = svg_geometry.flatten_subpath("M0 0 L10 0 C10 5 5 10 0 10 Z")
+    assert ring[0].tolist() == [0, 0] and ring[-1].tolist() == [0, 10]
+    with pytest.raises(ValueError):
+        svg_geometry.flatten_subpath("M0 0 A5 5 0 0 1 10 0 Z")

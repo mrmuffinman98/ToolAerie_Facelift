@@ -125,7 +125,7 @@ def remove_tree(path: Path) -> None:
 # The only things the app ever creates inside a saved drawer folder. When a
 # drawer is saved over an older copy, only these are replaced, so any other
 # files the user put in that folder are left alone.
-_APP_ITEMS = ("tools", "photos", "masks", "steps", "drawer.json", "session.json")  # session.json: older versions
+_APP_ITEMS = ("tools", "outlines", "photos", "masks", "steps", "drawer.json", "session.json")  # session.json: older versions
 
 
 def is_nonempty_dir(path: Path) -> bool:

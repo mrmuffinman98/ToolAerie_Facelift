@@ -20,6 +20,9 @@ import numpy as np
 # Outline is simplified to within this tolerance (mm) before saving.
 SIMPLIFY_MM = 0.05
 
+# The traced outline (already smooth curves) is only thinned of redundant points.
+TRACE_SIMPLIFY_MM = 0.005
+
 # Below this length/width ratio the long axis is not meaningful (round-ish tool).
 MIN_ELONGATION = 1.25
 # If the centre of mass sits this close to the middle of the tool (fraction of
@@ -27,7 +30,8 @@ MIN_ELONGATION = 1.25
 SYMMETRY_TOLERANCE = 0.03
 
 
-def analyze_shape(outlines_px: list[np.ndarray], pixels_per_mm: float) -> dict:
+def analyze_shape(outlines_px: list[np.ndarray], pixels_per_mm: float,
+                  simplify_mm: float = SIMPLIFY_MM) -> dict:
     """Return polygon + measurements for the tool, all in millimetres.
 
     Args:
@@ -38,7 +42,7 @@ def analyze_shape(outlines_px: list[np.ndarray], pixels_per_mm: float) -> dict:
     rings_px = []
     for o in outlines_px:
         c = np.asarray(o, dtype=np.float32).reshape(-1, 1, 2)
-        simp = cv2.approxPolyDP(c, SIMPLIFY_MM * ppm, True).reshape(-1, 2)
+        simp = cv2.approxPolyDP(c, simplify_mm * ppm, True).reshape(-1, 2)
         if len(simp) >= 3:
             rings_px.append(simp.astype(np.float64))
     if not rings_px:

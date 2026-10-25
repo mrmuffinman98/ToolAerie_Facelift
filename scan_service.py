@@ -70,6 +70,7 @@ class Part:
     raw_outlines: list[np.ndarray]  # pixel coords, WITHOUT clearance
     width_mm: float
     height_mm: float
+    base_mask: np.ndarray | None = None   # this tool only, WITHOUT clearance (filled outline)
 
 
 @dataclass
@@ -235,7 +236,8 @@ def analyze(prepared: np.ndarray, settings: Settings | None = None) -> ScanResul
             continue
         pts = np.vstack(outs)
         parts.append(Part(pm, outs, [c.reshape(-1, 2).astype(np.float64)],
-                          float(np.ptp(pts[:, 0])) / ppm, float(np.ptp(pts[:, 1])) / ppm))
+                          float(np.ptp(pts[:, 0])) / ppm, float(np.ptp(pts[:, 1])) / ppm,
+                          base_mask=raw_mask))
     if not parts:
         raise ScanError("No tool found. Check the tool is on the light board "
                         "and not touching the marker.")
@@ -373,7 +375,14 @@ def render_overlay(r: ScanResult, mode: str = "overlay",
 # Vector output
 # ---------------------------------------------------------------------------
 
-def to_svg_string(r: ScanResult) -> str:
-    """Trace the result's mask into a raw (pixel-space) vtracer SVG string."""
+def to_svg_string(r: ScanResult, with_clearance: bool = True) -> str:
+    """Trace the result's mask into a raw (pixel-space) vtracer SVG string.
+
+    with_clearance=False traces the same tool without the clearance (same
+    vtracer step, same settings), for the board builder to add its own.
+    """
+    mask = r.mask
+    if not with_clearance and len(r.parts) == 1 and r.parts[0].base_mask is not None:
+        mask = r.parts[0].base_mask
     with contextlib.redirect_stdout(io.StringIO()):
-        return vectorize.bitmap_to_svg_string(r.mask)
+        return vectorize.bitmap_to_svg_string(mask)

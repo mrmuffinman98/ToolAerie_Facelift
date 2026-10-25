@@ -11,6 +11,7 @@ Drawer 1/
 │                                Illustrator / LightBurn / any laser software
 ├── drawer.json               <- manifest: geometry and measurements (below)
 ├── tools/tool_01.svg ...     <- one real-size SVG per tool (clearance included)
+├── outlines/tool_01.svg ...  <- the FINAL traced outline with NO clearance (what polygon_mm is read from)
 ├── masks/tool_01.png ...     <- pure black/white mask each tool was traced from (255 = tool)
 ├── photos/tool_01.jpg ...    <- the photo each outline came from (undistorted, cropped)
 └── steps/scan_01/ ...        <- troubleshooting pictures of every processing step (folder only;
@@ -58,7 +59,7 @@ Drawer 1/
 
 | field | meaning |
 |---|---|
-| `polygon_mm` | list of closed rings `[[x,y],...]`, simplified to 0.05 mm. Usually one ring; several if the scan found separate pieces |
+| `polygon_mm` | list of closed rings `[[x,y],...]`, read from the final traced SVG (outlines/), simplified to 0.005 mm. Usually one ring; several if the scan found separate pieces |
 | `area_mm2`, `bbox_mm` | area and bounding box `[width, height]` |
 | `centroid_mm` | centre of mass `[x, y]` |
 | `principal_axis_deg` | direction of the tool's long axis, -90..+90, measured from +x toward +y (down) |
@@ -89,3 +90,11 @@ choose clearance per tool, add finger cutouts and compare shapes from the real o
 
 Readers should check `schema_version`. New optional fields may be added without a
 version bump, so ignore keys you don't know.
+
+## Where `geometry` comes from (v0.3)
+
+`polygon_mm` is read from the scan's FINAL output: the vtracer SVG, traced and exported by the
+same steps as `tools/*.svg`, only with 0 clearance (`outlines/tool_NN.svg`, `files.outline`).
+It is not taken from the mask or any intermediate step. Extra keys on `geometry`:
+`source` (which file), `trace_edge_shift_mm` (how far the traced edge sits from the mask edge,
+about +0.1 mm is normal for vtracer) and `specks_dropped` (stray pieces under 1 mm² left out).

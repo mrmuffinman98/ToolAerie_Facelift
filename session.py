@@ -30,6 +30,7 @@ import export
 import scan_service
 import shape_info
 import storage
+import svg_geometry
 
 _SVG_NS = "http://www.w3.org/2000/svg"
 _STROKE_MM = 0.1  # hairline cut width, same as the single-tool export
@@ -55,6 +56,7 @@ class ToolRecord:
     warnings: list = field(default_factory=list)
     scanned: str = ""
     mask_file: str = ""              # pure black/white mask this tool was traced from
+    outline_file: str = ""           # final traced SVG WITHOUT clearance (source of geometry)
     scan_id: int = 0                 # tools from one photo share this (undo removes them together)
     # Outline in mm relative to the SVG canvas origin; used for the layout
     # preview only, not for the cut file.
@@ -89,6 +91,7 @@ class Session:
         (folder / "photos").mkdir(parents=True)
         (folder / "tools").mkdir()
         (folder / "masks").mkdir()
+        (folder / "outlines").mkdir()
         self.tools: list[ToolRecord] = []
         self.gap_mm = float(config.DEFAULT_TOOL_GAP_MM)
         self.max_width_mm: float | None = None   # None = one column
@@ -180,6 +183,43 @@ class Session:
         _, w_px, h_px = export.tool_paths(raw_svg)
         ppm = result.pixels_per_mm
 
+        # The outline handed to the board builder comes from the FINAL traced SVG
+        # (vtracer + export), not from the mask's pixels: the same last steps as
+        # tools/*.svg, but traced without clearance so the builder can choose its own.
+        base_raw = (scan_service.to_svg_string(result, with_clearance=False)
+                    if result.settings.offset_mm > 0 else raw_svg)
+        outline_path = export.svg_to_file(base_raw, ppm, output_filename=f"{stem}.svg",
+                                          output_dir=str(self.folder / "outlines"))
+        notes = list(result.warnings)
+        try:
+            base_paths, _, _ = export.tool_paths(base_raw)
+            rings = svg_geometry.flatten_paths(base_paths)
+            # vtracer sometimes leaves a speck of a few pixels where the mask has a
+            # one-pixel whisker. Specks under 1 mm² are left out of the builder's
+            # outline (they stay in tools/*.svg exactly as traced); the count is recorded.
+            areas = [abs(float(cv2.contourArea(r.astype("float32")))) / ppm ** 2 for r in rings]
+            amax = max(areas) if areas else 0.0
+            keep = [r for r, a in zip(rings, areas) if a >= max(1.0, 0.001 * amax)] or rings
+            geometry = shape_info.analyze_shape(keep, ppm, simplify_mm=shape_info.TRACE_SIMPLIFY_MM)
+            geometry["source"] = "final traced svg (outlines/" + Path(outline_path).name + ")"
+            if len(keep) < len(rings):
+                geometry["specks_dropped"] = len(rings) - len(keep)
+            part = result.parts[0] if result.parts else None
+            if part is not None and part.base_mask is not None:
+                # how far the traced edge sits from the mask's edge, on average (mm)
+                mask_area = float((part.base_mask > 0).sum()) / ppm ** 2
+                perim = sum(float(cv2.arcLength(r.astype("float32").reshape(-1, 1, 2), True))
+                            for r in keep) / ppm
+                shift = (geometry["area_mm2"] - mask_area) / max(perim, 1e-9)
+                geometry["trace_edge_shift_mm"] = round(shift, 3)
+                if abs(shift) > 0.3:
+                    notes.append(f"The traced outline sits {shift:+.2f} mm from the mask edge on "
+                                 "average. Check this tool.")
+        except ValueError as e:                 # should not happen with vtracer output
+            geometry = shape_info.analyze_shape(result.raw_outlines, ppm)
+            geometry["source"] = "mask outline (traced svg could not be read)"
+            notes.append(f"Could not read the traced outline ({e}); the mask outline was used instead.")
+
         # Where the vtracer canvas sits in the photo (mirrors vectorize.py's
         # 10 px padded bounding box) so outlines can be redrawn for preview.
         allpts = [o for o in result.outlines]
@@ -192,11 +232,12 @@ class Session:
                          w_px / ppm, h_px / ppm, ppm,
                          uid=uuid.uuid4().hex[:12],
                          clearance_mm=result.settings.offset_mm,
-                         geometry=shape_info.analyze_shape(result.raw_outlines, ppm),
-                         warnings=list(result.warnings),
+                         geometry=geometry,
+                         warnings=notes,
                          scanned=time.strftime("%Y-%m-%d %H:%M:%S"),
                          scan_id=scan_id,
                          mask_file=str(mask_path.relative_to(self.folder)),
+                         outline_file=str(Path(outline_path).relative_to(self.folder)),
                          preview_outlines_mm=preview)
         self.tools.append(rec)
         self.dirty = True
@@ -212,7 +253,7 @@ class Session:
         while self.tools and (self.tools[-1].scan_id == sid if sid else not removed):
             removed.append(self.tools.pop())
         for rec in removed:
-            for rel in (rec.svg_file, rec.photo_file, rec.mask_file):
+            for rel in (rec.svg_file, rec.photo_file, rec.mask_file, rec.outline_file):
                 if rel:
                     (self.folder / rel).unlink(missing_ok=True)
         if sid:
@@ -326,7 +367,8 @@ class Session:
                 "id": t.uid,
                 "index": t.index,
                 "name": t.name,
-                "files": {"svg": t.svg_file, "photo": t.photo_file, "mask": t.mask_file},
+                "files": {"svg": t.svg_file, "photo": t.photo_file, "mask": t.mask_file,
+                          "outline": t.outline_file},
                 "scale_px_per_mm": round(t.pixels_per_mm, 4),
                 "clearance_mm_in_svg": t.clearance_mm,
                 "svg_size_mm": [round(t.width_mm, 3), round(t.height_mm, 3)],
