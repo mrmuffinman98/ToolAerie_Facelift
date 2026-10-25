@@ -169,3 +169,16 @@ aviation-tool-accountability/
 ├── sample_images/         # Test images (no camera needed)
 └── output/                # Generated SVGs (git-ignored)
 ```
+
+
+## Tool count, solid outlines (v0.3)
+
+- **Tools on the board:** type how many tools you placed (Scan and Review screens). The scan keeps
+  that many outlines (the largest ones), numbered left to right, and never more. If it finds fewer
+  (two tools touching), it tells you to move them apart. Extra pieces are shown dotted orange and
+  ignored.
+- **Solid outlines:** the original edge detection is unchanged. If a large tool's edge has a gap and
+  the outline would come out hollow, the tool's solid inside is filled in. Tools that were already
+  solid are untouched (identical to the original result).
+- **Roundness numbers** for each tool are saved in `drawer.json` (for the board builder's
+  "make round" option). Outlines themselves are never rounded by the scanner.

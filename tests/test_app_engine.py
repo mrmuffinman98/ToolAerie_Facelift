@@ -89,8 +89,9 @@ def test_rows_mode_wraps(tmp_path):
 
 def test_undo_removes_files(tmp_path):
     s = _session_with_tools(tmp_path, 2)
-    rec = s.remove_last()
-    assert not (s.folder / rec.svg_file).exists()
+    recs = s.remove_last()
+    assert len(recs) == 1
+    assert not (s.folder / recs[0].svg_file).exists()
     assert len(s.tools) == 1
 
 

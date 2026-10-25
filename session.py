@@ -54,6 +54,7 @@ class ToolRecord:
     geometry: dict = field(default_factory=dict)   # shape_info.analyze_shape(): no clearance
     warnings: list = field(default_factory=list)
     scanned: str = ""
+    scan_id: int = 0                 # tools from one photo share this (undo removes them together)
     # Outline in mm relative to the SVG canvas origin; used for the layout
     # preview only, not for the cut file.
     preview_outlines_mm: list = field(default_factory=list, repr=False)
@@ -102,7 +103,21 @@ class Session:
 
     # --- tools -----------------------------------------------------------
 
-    def add_tool(self, result: scan_service.ScanResult, name: str | None = None) -> ToolRecord:
+    def add_scan(self, result: scan_service.ScanResult, name: str | None = None) -> list[ToolRecord]:
+        """Save every tool found in one scan as its own tool (the user's tool count
+        decided how many). Several tools in one photo get '<name> 1', '<name> 2'..."""
+        self._scan_seq = getattr(self, "_scan_seq", 0) + 1
+        parts = result.split()
+        recs = []
+        for i, part in enumerate(parts, 1):
+            nm = (name or "").strip()
+            if nm and len(parts) > 1:
+                nm = f"{nm} {i}"
+            recs.append(self.add_tool(part, nm or None, scan_id=self._scan_seq))
+        return recs
+
+    def add_tool(self, result: scan_service.ScanResult, name: str | None = None,
+                 scan_id: int = 0) -> ToolRecord:
         idx = (self.tools[-1].index + 1) if self.tools else 1
         tool_name = (name or "").strip() or f"tool_{idx:02d}"
         stem = f"tool_{idx:02d}_{_slug(tool_name)}" if name and name.strip() else f"tool_{idx:02d}"
@@ -133,22 +148,27 @@ class Session:
                          geometry=shape_info.analyze_shape(result.raw_outlines, ppm),
                          warnings=list(result.warnings),
                          scanned=time.strftime("%Y-%m-%d %H:%M:%S"),
+                         scan_id=scan_id,
                          preview_outlines_mm=preview)
         self.tools.append(rec)
         self.dirty = True
         self._save_manifest()
         return rec
 
-    def remove_last(self) -> ToolRecord | None:
-        """Undo the most recent confirm."""
+    def remove_last(self) -> list[ToolRecord]:
+        """Undo the most recent confirm: removes all tools saved from that one scan."""
         if not self.tools:
-            return None
-        rec = self.tools.pop()
-        for rel in (rec.svg_file, rec.photo_file):
-            (self.folder / rel).unlink(missing_ok=True)
+            return []
+        sid = self.tools[-1].scan_id
+        removed: list[ToolRecord] = []
+        while self.tools and (self.tools[-1].scan_id == sid if sid else not removed):
+            removed.append(self.tools.pop())
+        for rec in removed:
+            for rel in (rec.svg_file, rec.photo_file):
+                (self.folder / rel).unlink(missing_ok=True)
         self.dirty = bool(self.tools)
         self._save_manifest()
-        return rec
+        return removed[::-1]
 
     # --- combined layout -------------------------------------------------
 

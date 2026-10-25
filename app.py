@@ -444,7 +444,9 @@ class StartScreen(Screen):
     def how_it_works(self):
         ask(self.app, "How it works",
             "1.  Lay the printed marker flat on the light board, away from where tools go.\n"
-            "2.  Put one tool on the board and press SCAN (or turn on Auto-scan).\n"
+            "2.  Put your tool(s) on the board, set 'Tools on the board' to how many you placed, "
+            "and press SCAN (or turn on Auto-scan). Several tools can be scanned at once if they "
+            "don't touch.\n"
             "3.  Check the green outline on the photo. Press CONFIRM, or Retake if it looks wrong.\n"
             "4.  Repeat for every tool in the drawer, then press Finish.\n"
             "5.  Press SAVE. The files are put in the folder you chose, ready to copy to a USB stick.",
@@ -525,9 +527,15 @@ class ScanScreen(Screen):
         self.count = tk.Label(side, text="0", bg=PANEL, fg=FG, font=app.f(28 if c else 40, True))
         self.count.pack()
         tk.Label(side, text="tools scanned", bg=PANEL, fg=MUTED, font=app.f(11)).pack()
+        self.expected_step = Stepper(
+            app, side, "Tool count" if c else "Tools on the board right now",
+            app.settings.expected, 1, 1, scan_service.MAX_TOOLS, "{:.0f}",
+            lambda v: setattr(app, "settings", dataclasses.replace(app.settings, expected=int(v))),
+            hint="Count them and type it in. Scan will never find more than this.")
+        self.expected_step.pack(fill="x", padx=16, pady=(6 if c else 12, 0))
         self.scan_btn = Btn(side, "SCAN", self.scan, GREEN, "#06210f", app.f(26, True),
                             pady=14 if c else 24)
-        self.scan_btn.pack(fill="x", padx=16, pady=(10 if c else 22, 6))
+        self.scan_btn.pack(fill="x", padx=16, pady=(8 if c else 14, 6))
         self.auto_lbl = tk.Label(side, text="", bg=PANEL, fg=MUTED, font=app.f(10),
                                  wraplength=int(250 * app.k), justify="center")
         self.auto_lbl.pack(padx=12, pady=(2, 0))
@@ -552,6 +560,7 @@ class ScanScreen(Screen):
         self.scan_btn.config(text="SCAN")
         self.scan_btn.set_enabled(True)
         self.count.config(text=str(len(self.app.session.tools)))
+        self.expected_step.set(self.app.settings.expected)
         self.tick()
 
     def on_key(self, e):
@@ -616,9 +625,10 @@ class ScanScreen(Screen):
         self.app.run_bg(work, ok, err)
 
     def undo(self):
-        rec = self.app.session.remove_last()
-        if rec:
-            self.flash(f"Removed {rec.name}", AMBER)
+        recs = self.app.session.remove_last()
+        if recs:
+            self.flash("Removed " + (recs[0].name if len(recs) == 1
+                                     else f"{len(recs)} tools from the last scan"), AMBER)
             self.count.config(text=str(len(self.app.session.tools)))
             self.app.show("ScanScreen")
         else:
@@ -676,6 +686,9 @@ class ReviewScreen(Screen):
 
         s = app.settings
         self.steps = {
+            "expected": Stepper(app, side, "Tool count" if c else "Tools on the board", s.expected, 1, 1,
+                                scan_service.MAX_TOOLS, "{:.0f}",
+                                lambda v: self.change(expected=int(v))),
             "offset_mm": Stepper(app, side, "Clearance" if c else "Clearance around tool", s.offset_mm, 0.5, 0, 15,
                                  "{:.1f} mm", lambda v: self.change(offset_mm=v)),
             "adaptive_c": Stepper(app, side, "Threshold" if c else "Edge threshold", s.adaptive_c, 1, 1, 40,
@@ -712,6 +725,7 @@ class ReviewScreen(Screen):
 
     def on_show(self):
         s = self.app.settings
+        self.steps["expected"].set(s.expected)
         self.steps["offset_mm"].set(s.offset_mm)
         self.steps["adaptive_c"].set(s.adaptive_c)
         self.steps["min_area_px"].set(s.min_area_px)
@@ -728,9 +742,13 @@ class ReviewScreen(Screen):
 
     def _show_result(self):
         r = self.result
-        self.size_lbl.config(text=f"{r.width_mm:.1f} × {r.height_mm:.1f} mm")
-        self.info_lbl.config(
-            text=f"{r.pieces} piece{'s' if r.pieces != 1 else ''}  ·  {r.pixels_per_mm:.2f} px/mm")
+        if len(r.parts) > 1:
+            self.size_lbl.config(text=f"{len(r.parts)} tools found")
+            self.info_lbl.config(text="  ".join(
+                f"{i}: {p.width_mm:.0f}×{p.height_mm:.0f}" for i, p in enumerate(r.parts, 1)) + " mm")
+        else:
+            self.size_lbl.config(text=f"{r.width_mm:.1f} × {r.height_mm:.1f} mm")
+            self.info_lbl.config(text=f"1 tool  ·  {r.pixels_per_mm:.2f} px/mm")
         self.warn.config(text="\n".join("! " + w for w in r.warnings))
         self.confirm_btn.set_enabled(True)
         self.redraw()
@@ -786,13 +804,14 @@ class ReviewScreen(Screen):
         self.confirm_btn.set_enabled(False)
         result, name, session = self.result, self.name_var.get(), self.app.session
 
-        def ok(rec):
+        def ok(recs):
             self.confirm_btn.config(text="CONFIRM")
             self.result = None
             self.app.next_demo_tool()
             self.app.show("ScanScreen")
-            self.app.screens["ScanScreen"].flash(
-                f"Added {rec.name}  ({rec.width_mm:.0f} × {rec.height_mm:.0f} mm)")
+            msg = (f"Added {recs[0].name}  ({recs[0].width_mm:.0f} × {recs[0].height_mm:.0f} mm)"
+                   if len(recs) == 1 else f"Added {len(recs)} tools")
+            self.app.screens["ScanScreen"].flash(msg)
 
         def err(e):
             self._saving = False
@@ -800,7 +819,7 @@ class ReviewScreen(Screen):
             self.confirm_btn.set_enabled(True)
             self.flash(f"Could not save: {e}", RED, 8000)
 
-        self.app.run_bg(lambda: session.add_tool(result, name), ok, err)
+        self.app.run_bg(lambda: session.add_scan(result, name), ok, err)
 
     def retake(self):
         self._token += 1          # drop any adjustment still running

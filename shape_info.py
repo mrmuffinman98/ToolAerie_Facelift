@@ -71,6 +71,7 @@ def analyze_shape(outlines_px: list[np.ndarray], pixels_per_mm: float) -> dict:
     offset = centroid_along - mid_along                # + means mass toward +axis end
 
     elong = length / width if width > 1e-6 else float("inf")
+    round_info = _roundness(main, area_main=abs(_area(main)))
     angle = ((math.degrees(theta) + 90.0) % 180.0) - 90.0   # -90..+90, from +x toward +y (down)
     return {
         "polygon_mm": [np.round(r, 3).tolist() for r in rings_mm],
@@ -84,6 +85,38 @@ def analyze_shape(outlines_px: list[np.ndarray], pixels_per_mm: float) -> dict:
         "axis_reliable": bool(elong >= MIN_ELONGATION),
         "centroid_offset_along_axis_mm": round(offset, 2),
         "direction_ambiguous": bool(abs(offset) < SYMMETRY_TOLERANCE * max(length, 1e-6)),
+        **round_info,
+    }
+
+
+def _roundness(ring: np.ndarray, area_main: float) -> dict:
+    """How close the outline is to a circle (for the board builder's "make round").
+
+    Added fields only; the outline itself is never changed here.
+      equiv_diameter_mm         circle with the same area as the outline
+      min_circle_diameter_mm    smallest circle that contains the whole outline
+      circularity               4*pi*area / perimeter^2  (1.0 = perfect circle)
+      max_radial_dev_mm         worst gap between the outline and the same-area
+                                circle centred on the outline's centre of mass
+    """
+    pts = ring.astype(np.float32)
+    # smooth the pixel staircase a little so the perimeter isn't inflated by noise
+    smooth = cv2.approxPolyDP(pts.reshape(-1, 1, 2), 0.25, True)
+    perim = float(cv2.arcLength(smooth, True))
+    (_, _), r_min = cv2.minEnclosingCircle(pts.reshape(-1, 1, 2))
+    r_eq = math.sqrt(area_main / math.pi) if area_main > 0 else 0.0
+    m = cv2.moments(pts)
+    if m["m00"]:
+        c = np.array([m["m10"] / m["m00"], m["m01"] / m["m00"]])
+    else:
+        c = pts.mean(axis=0)
+    dev = float(np.abs(np.hypot(*(ring - c).T) - r_eq).max()) if len(ring) else 0.0
+    circ = 4.0 * math.pi * area_main / (perim * perim) if perim > 1e-9 else 0.0
+    return {
+        "equiv_diameter_mm": round(2 * r_eq, 2),
+        "min_circle_diameter_mm": round(2 * float(r_min), 2),
+        "circularity": round(min(circ, 1.0), 4),
+        "max_radial_dev_mm": round(dev, 2),
     }
 
 

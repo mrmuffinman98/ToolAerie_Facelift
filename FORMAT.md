@@ -63,7 +63,18 @@ Drawer 1/
 | `elongation` | length / width |
 | `axis_reliable` | `false` for round-ish tools (sockets): the axis angle means nothing |
 | `centroid_offset_along_axis_mm` | how far the centre of mass is from the middle of the tool along the axis (+ = toward the +axis end). Handle vs head hint |
+| `equiv_diameter_mm` | diameter of the circle with the same area as the outline (for a "make round" option) |
+| `min_circle_diameter_mm` | smallest circle that contains the whole outline |
+| `circularity` | 4·pi·area / perimeter² (1.0 = perfect circle) |
+| `max_radial_dev_mm` | worst gap between the outline and the same-area circle centred on the tool's centre of mass. Small = round enough to replace with a circle |
 | `direction_ambiguous` | `true` when the tool is nearly symmetric end to end, so which end is the head cannot be told from shape alone. Ask the user |
+
+## Solid outlines, one ring per tool
+
+Each tool is saved as a solid silhouette: `polygon_mm` normally has ONE ring, and slots or
+gaps inside a tool are filled (the cut is the foam pocket for the whole tool). The scanner asks
+how many tools are on the board and never saves more tools than that; several tools scanned
+in one photo become separate entries in `tools[]`.
 
 ## Why two copies of the outline?
 

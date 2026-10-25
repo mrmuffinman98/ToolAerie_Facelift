@@ -73,3 +73,16 @@ Crash recovery for unsaved drawers, adding tools to an already-saved drawer, nam
 ## 7. Repo map (scanner)
 
 `app.py` UI screens | `session.py` drawer model + combined SVG + manifest | `shape_info.py` geometry for the hand-off | `storage.py` folders/settings/zip | `scan_service.py` + `process.py` + `vectorize.py` + `export.py` pipeline | `camera.py` Pi/demo cameras | `autoscan.py` | `install.sh` one-step Pi install | `FORMAT.md` the contract.
+
+## 8. Scanner v0.3 changes (2026-10-24) the builder can rely on
+
+- Outlines are now always SOLID: `polygon_mm` normally has one ring per tool (large tools used to
+  come out hollow, with a second ring for slots). If the builder sees more than one ring in a
+  tool, treat extras as separate pieces, not as holes.
+- The scanner asks for the number of tools on the board and saves exactly that many (never more).
+  Several tools from one photo are separate entries in `tools[]`.
+- New optional geometry fields (additive, schema_version still 1): `equiv_diameter_mm`,
+  `min_circle_diameter_mm`, `circularity`, `max_radial_dev_mm` — for a per-tool "make round"
+  option (replace the outline with a circle of equivalent diameter; show `max_radial_dev_mm` so the
+  user can judge). The scanner never rounds anything itself.
+- Re-scan any drawer made before v0.3 that contains large tools (hollow outlines).

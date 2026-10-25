@@ -22,6 +22,7 @@ import numpy as np
 
 import config
 import process
+import solidify
 import vectorize
 
 
@@ -36,6 +37,7 @@ class Settings:
     adaptive_c: float = float(config.ADAPTIVE_C)             # lower = more sensitive edges
     adaptive_block: int = int(config.ADAPTIVE_BLOCK_SIZE)    # neighbourhood size (odd)
     min_area_px: int = int(config.CONTOUR_MIN_AREA)          # ignore specks smaller than this
+    expected: int = 1                                        # how many tools are on the board
 
     def clamped(self) -> "Settings":
         block = max(3, int(self.adaptive_block)) | 1  # force odd
@@ -45,7 +47,11 @@ class Settings:
             adaptive_c=min(max(self.adaptive_c, 1.0), 40.0),
             adaptive_block=block,
             min_area_px=max(100, int(self.min_area_px)),
+            expected=min(max(int(self.expected), 1), MAX_TOOLS),
         )
+
+
+MAX_TOOLS = 12
 
 
 class ScanError(Exception):
@@ -57,21 +63,50 @@ class ScanError(Exception):
 # ---------------------------------------------------------------------------
 
 @dataclass
+class Part:
+    """One tool found in the photo."""
+    mask: np.ndarray                # uint8, this tool only (clearance included)
+    outlines: list[np.ndarray]      # pixel coords, with clearance
+    raw_outlines: list[np.ndarray]  # pixel coords, WITHOUT clearance
+    width_mm: float
+    height_mm: float
+
+
+@dataclass
 class ScanResult:
     prepared: np.ndarray            # undistorted + cropped BGR photo
-    mask: np.ndarray                # uint8, tool = 255
+    mask: np.ndarray                # uint8, all kept tools = 255
     outlines: list[np.ndarray]      # list of (N, 2) float arrays, pixel coords (with clearance)
     pixels_per_mm: float
     settings: Settings
     marker_corners: np.ndarray      # (4, 2)
     raw_outlines: list[np.ndarray] = field(default_factory=list)  # same, WITHOUT clearance
-    width_mm: float = 0.0           # overall bounding box of the tool
+    width_mm: float = 0.0           # overall bounding box of everything kept
     height_mm: float = 0.0
     warnings: list[str] = field(default_factory=list)
+    parts: list[Part] = field(default_factory=list)        # one per tool, left to right
+    ignored_outlines: list[np.ndarray] = field(default_factory=list)  # pieces not kept
+    expected: int = 1               # the tool count the user asked for
+    found: int = 0                  # how many separate pieces were seen in total
 
     @property
     def pieces(self) -> int:
-        return len(self.outlines)
+        """Number of tools kept (never more than the count the user entered)."""
+        return len(self.parts) or len(self.outlines)
+
+    def split(self) -> list["ScanResult"]:
+        """One single-tool ScanResult per kept tool (for saving each separately)."""
+        if len(self.parts) <= 1:
+            return [self]
+        out = []
+        for part in self.parts:
+            r = ScanResult(self.prepared, part.mask, part.outlines, self.pixels_per_mm,
+                           self.settings, self.marker_corners, raw_outlines=part.raw_outlines,
+                           width_mm=part.width_mm, height_mm=part.height_mm,
+                           parts=[part], expected=1, found=1)
+            r.warnings = _quality_warnings(r)
+            out.append(r)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +178,13 @@ def _config_overrides(s: Settings):
 
 
 def analyze(prepared: np.ndarray, settings: Settings | None = None) -> ScanResult:
-    """Find the tool outline in a prepared photo.
+    """Find the tool outline(s) in a prepared photo.
+
+    The edge detection is the original process.extract_silhouette. After it:
+      * a hollow outline (edge band with a gap on a large tool) is made solid;
+      * the user's tool count decides how many outlines are kept: the N largest,
+        never more than N;
+      * the clearance is added to each kept tool.
 
     Raises:
         ScanError: marker missing, nothing found, etc. (message is user-facing)
@@ -151,31 +192,63 @@ def analyze(prepared: np.ndarray, settings: Settings | None = None) -> ScanResul
     s = (settings or Settings()).clamped()
     quiet = io.StringIO()  # process.py prints progress; keep the console clean
     try:
-        with _config_overrides(s), contextlib.redirect_stdout(quiet):
-            mask, contours, ppm = process.extract_silhouette(prepared)
+        # clearance is applied below, per tool, so ask the original step for none
+        with _config_overrides(replace(s, offset_mm=0.0)), contextlib.redirect_stdout(quiet):
+            mask0, _contours, ppm = process.extract_silhouette(prepared)
             marker = process.detect_scale(prepared)[1]
     except RuntimeError as e:
         raise ScanError(_friendly(str(e))) from e
 
-    # Outlines come from the final mask so they include the clearance offset
-    # and match exactly what gets traced and cut.
-    found, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    outlines = [c.reshape(-1, 2).astype(np.float64) for c in found
-                if cv2.contourArea(c) >= s.min_area_px]
-    if not outlines:
+    solid, was_hollow = solidify.make_solid(prepared, mask0, s.min_area_px)
+
+    found_cnts, _ = cv2.findContours(solid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    found_cnts = [c for c in found_cnts if cv2.contourArea(c) >= s.min_area_px]
+    if not found_cnts:
+        raise ScanError("No tool found. Check the tool is on the light board "
+                        "and not touching the marker.")
+    found_cnts.sort(key=cv2.contourArea, reverse=True)
+    kept = found_cnts[:s.expected]
+    dropped = found_cnts[s.expected:]
+    kept.sort(key=lambda c: float(c[:, 0, 0].mean()))        # number tools left to right
+
+    offset_px = int(round(s.offset_mm * ppm)) if s.offset_mm > 0 else 0
+    grow = (cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * offset_px + 1, 2 * offset_px + 1))
+            if offset_px > 0 else None)
+
+    parts: list[Part] = []
+    for c in kept:
+        raw_mask = np.zeros_like(solid)
+        cv2.drawContours(raw_mask, [c], -1, 255, thickness=cv2.FILLED)
+        pm = cv2.dilate(raw_mask, grow) if grow is not None else raw_mask
+        outs, _ = cv2.findContours(pm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        outs = [o.reshape(-1, 2).astype(np.float64) for o in outs
+                if cv2.contourArea(o) >= s.min_area_px]
+        if not outs:
+            continue
+        pts = np.vstack(outs)
+        parts.append(Part(pm, outs, [c.reshape(-1, 2).astype(np.float64)],
+                          float(np.ptp(pts[:, 0])) / ppm, float(np.ptp(pts[:, 1])) / ppm))
+    if not parts:
         raise ScanError("No tool found. Check the tool is on the light board "
                         "and not touching the marker.")
 
+    all_mask = np.zeros_like(solid)
+    for p in parts:
+        all_mask = cv2.bitwise_or(all_mask, p.mask)
+    outlines = [o for p in parts for o in p.outlines]
+    raw = [o for p in parts for o in p.raw_outlines]
     allpts = np.vstack(outlines)
-    w_mm = float(np.ptp(allpts[:, 0])) / ppm
-    h_mm = float(np.ptp(allpts[:, 1])) / ppm
-
-    # The true tool shape, before clearance: what the board builder works from.
-    raw = [c.reshape(-1, 2).astype(np.float64) for c in contours
-           if cv2.contourArea(c) >= s.min_area_px]
-    result = ScanResult(prepared, mask, outlines, ppm, s, marker,
-                        raw_outlines=raw or outlines, width_mm=w_mm, height_mm=h_mm)
-    result.warnings = _quality_warnings(result)
+    result = ScanResult(prepared, all_mask, outlines, ppm, s, marker, raw_outlines=raw,
+                        width_mm=float(np.ptp(allpts[:, 0])) / ppm,
+                        height_mm=float(np.ptp(allpts[:, 1])) / ppm,
+                        parts=parts,
+                        ignored_outlines=[c.reshape(-1, 2).astype(np.float64) for c in dropped],
+                        expected=s.expected, found=len(found_cnts))
+    result.warnings = _count_warnings(result, [cv2.contourArea(c) / ppm ** 2 for c in dropped]) \
+        + _quality_warnings(result)
+    if was_hollow:
+        result.warnings.append("This tool's edge had a gap, so its inside was filled in "
+                               "to make a solid outline.")
     return result
 
 
@@ -194,6 +267,22 @@ def _friendly(msg: str) -> str:
     return msg
 
 
+def _count_warnings(r: ScanResult, dropped_areas_mm2: list[float]) -> list[str]:
+    out: list[str] = []
+    n = r.expected
+    if len(r.parts) < n:
+        out.append(f"You said {n} tools but only {len(r.parts)} "
+                   f"{'was' if len(r.parts) == 1 else 'were'} found. If two tools are "
+                   "touching, move them apart and scan again.")
+    if dropped_areas_mm2:
+        k = len(dropped_areas_mm2)
+        sizes = ", ".join(f"{a:.0f} mm²" for a in dropped_areas_mm2[:3])
+        out.append(f"Ignored {k} other piece{'s' if k != 1 else ''} ({sizes}) because you "
+                   f"said {n} tool{'s' if n != 1 else ''}. Shown dotted in orange. If a tool "
+                   "really has several parts, raise the tool count.")
+    return out
+
+
 def _quality_warnings(r: ScanResult) -> list[str]:
     out: list[str] = []
     h, w = r.mask.shape[:2]
@@ -202,9 +291,6 @@ def _quality_warnings(r: ScanResult) -> list[str]:
     if (pts[:, 0].min() < margin or pts[:, 1].min() < margin
             or pts[:, 0].max() > w - margin or pts[:, 1].max() > h - margin):
         out.append("Tool is close to the edge of the frame. It may be cut off.")
-    if r.pieces > 1:
-        out.append(f"Found {r.pieces} separate pieces. Expected one tool? "
-                   "Raise 'Ignore specks' or move stray objects away.")
     if not (2.0 <= r.pixels_per_mm <= 60.0):
         out.append(f"Unusual scale ({r.pixels_per_mm:.1f} px/mm). "
                    "Check the marker size in config.py.")
@@ -229,6 +315,7 @@ def marker_visible(frame_bgr: np.ndarray) -> bool:
 
 OUTLINE_BGR = (0, 255, 120)     # bright green
 MARKER_BGR = (255, 160, 0)      # blue-ish, marks the detected marker
+IGNORED_BGR = (0, 140, 255)     # orange, pieces ignored because of the tool count
 
 
 def render_overlay(r: ScanResult, mode: str = "overlay",
@@ -249,6 +336,20 @@ def render_overlay(r: ScanResult, mode: str = "overlay",
                   OUTLINE_BGR, thick, cv2.LINE_AA)
     cv2.polylines(canvas, [r.marker_corners.astype(np.int32)], True,
                   MARKER_BGR, thick, cv2.LINE_AA)
+    # pieces that were NOT kept (more than the tool count): thin orange line
+    if r.ignored_outlines:
+        cv2.polylines(canvas, [o.astype(np.int32) for o in r.ignored_outlines], True,
+                      IGNORED_BGR, max(1, thick - 1), cv2.LINE_AA)
+    # several tools in one photo: number them so the list on the side makes sense
+    if len(r.parts) > 1:
+        scale_txt = max(1.2, canvas.shape[1] / 900)
+        for i, part in enumerate(r.parts, 1):
+            pts = np.vstack(part.outlines)
+            cx, cy = pts.mean(axis=0)
+            cv2.putText(canvas, str(i), (int(cx) - 12, int(cy) + 12), cv2.FONT_HERSHEY_SIMPLEX,
+                        scale_txt, (0, 0, 0), thick + 4, cv2.LINE_AA)
+            cv2.putText(canvas, str(i), (int(cx) - 12, int(cy) + 12), cv2.FONT_HERSHEY_SIMPLEX,
+                        scale_txt, (255, 255, 255), thick + 1, cv2.LINE_AA)
 
     ih, iw = canvas.shape[:2]
     scale = min(max_size[0] / iw, max_size[1] / ih, 1.0)
