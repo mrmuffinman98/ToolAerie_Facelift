@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 
 import config
+import markers as markers_mod
 import process
 import solidify
 import vectorize
@@ -208,6 +209,21 @@ def analyze(prepared: np.ndarray, settings: Settings | None = None) -> ScanResul
     except RuntimeError as e:
         raise ScanError(_friendly(str(e))) from e
 
+    # Extra markers: with only one marker in view nothing here changes. With two or
+    # more registered markers in view, use the average of their scales, and keep the
+    # extra markers from being read as tools.
+    scale_notes: list[str] = []
+    ms = markers_mod.combined_scale(prepared)
+    if ms is not None:
+        ppm = ms.ppm
+        mask0 = markers_mod.blank_markers(mask0, ms.corners, ms.extra_ids)
+        scale_notes.append(f"Scale from {len(ms.used)} markers (IDs "
+                           + ", ".join(str(i) for i, _ in ms.used) + ").")
+        if ms.spread > markers_mod.MAX_SPREAD:
+            scale_notes.append(
+                f"The markers disagree by {ms.spread * 100:.1f}% on size. Check each marker's "
+                "actual size in Marker setup, and that they all lie flat.")
+
     solid, was_hollow = solidify.make_solid(prepared, mask0, s.min_area_px)
 
     found_cnts, _ = cv2.findContours(solid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
@@ -258,6 +274,7 @@ def analyze(prepared: np.ndarray, settings: Settings | None = None) -> ScanResul
                                "solid_mask": solid, "was_hollow": bool(was_hollow)})
     result.warnings = _count_warnings(result, [cv2.contourArea(c) / ppm ** 2 for c in dropped]) \
         + _quality_warnings(result)
+    result.warnings.extend(scale_notes)
     if was_hollow:
         result.warnings.append("This tool's edge had a gap, so its inside was filled in "
                                "to make a solid outline.")

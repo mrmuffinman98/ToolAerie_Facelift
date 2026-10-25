@@ -138,7 +138,7 @@ COMBINED_MARGIN_MM = 5.0
 
 # Version numbers written into each saved drawer (see FORMAT.md). Bump
 # MANIFEST_SCHEMA_VERSION whenever the layout of drawer.json changes.
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 MANIFEST_SCHEMA_VERSION = 1
 
 # ---------------------------------------------------------------------------

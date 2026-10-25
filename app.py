@@ -36,6 +36,7 @@ import numpy as np
 import autoscan
 import camera as cam_mod
 import config
+import markers as markers_mod
 import scan_service
 import storage
 from scan_service import ScanError, Settings
@@ -120,12 +121,13 @@ class App(tk.Tk):
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(0, weight=1)
         self.screens = {}
-        for cls in (StartScreen, ScanScreen, ReviewScreen, DoneScreen):
+        for cls in (HomeScreen, MarkerScreen, StartScreen, ScanScreen, ReviewScreen, DoneScreen):
             s = cls(body, self)
             s.grid(row=0, column=0, sticky="nsew")
             self.screens[cls.__name__] = s
         self.current = None
-        self.show("StartScreen")
+        markers_mod.apply_to_config()      # main marker size from Marker setup
+        self.show("HomeScreen")
 
         self.bind("<F11>", lambda e: self.attributes(
             "-fullscreen", not self.attributes("-fullscreen")))
@@ -385,6 +387,145 @@ class Screen(tk.Frame):
 # Start
 # ---------------------------------------------------------------------------
 
+class HomeScreen(Screen):
+    def __init__(self, parent, app):
+        super().__init__(parent, app)
+        c = app.compact
+        box = tk.Frame(self, bg=BG)
+        box.place(relx=0.5, rely=0.47, anchor="center")
+        tk.Label(box, text="What would you like to do?", bg=BG, fg=FG,
+                 font=app.f(22 if c else 26, True)).pack(pady=(0, 14 if c else 24))
+        Btn(box, "SCAN TOOLS", lambda: app.show("StartScreen"), GREEN, DARK_GREEN_TEXT,
+            app.f(20, True), padx=70, pady=14 if c else 20).pack(fill="x", pady=5)
+        Btn(box, "MARKER SETUP", lambda: app.show("MarkerScreen"), BLUE, "#ffffff",
+            app.f(20, True), padx=70, pady=14 if c else 20).pack(fill="x", pady=5)
+        tk.Label(box, text="Marker setup: print scale markers and set their real sizes.",
+                 bg=BG, fg=MUTED, font=app.f(11)).pack(pady=(8, 10))
+        Btn(box, "Quit", app.request_exit, PANEL, MUTED, app.f(11), padx=30, pady=5).pack()
+
+
+# ---------------------------------------------------------------------------
+# Marker setup
+# ---------------------------------------------------------------------------
+
+class MarkerScreen(Screen):
+    """One row per scale marker: its printed (intended) size, its actual size, Print."""
+
+    def __init__(self, parent, app):
+        super().__init__(parent, app)
+        c = app.compact
+        self.markers: list = []
+        tk.Label(self, text="Marker setup", bg=BG, fg=FG, font=app.f(20 if c else 24, True)
+                 ).pack(pady=(10 if c else 18, 2))
+        tk.Label(self, text="Each marker on the board has its own size. If a marker prints at a "
+                            "different size, don't reprint: measure the black square with a "
+                            "ruler and type it in 'Actual size'.",
+                 bg=BG, fg=MUTED, font=app.f(10 if c else 11), wraplength=int(700 * app.k)
+                 ).pack(pady=(0, 8))
+        self.rows = tk.Frame(self, bg=BG)
+        self.rows.pack(padx=20)
+        self.note = tk.Label(self, text="", bg=BG, fg=GREEN, font=app.f(11),
+                             wraplength=int(700 * app.k))
+        self.note.pack(pady=6)
+        bar = tk.Frame(self, bg=BG)
+        bar.pack(pady=4)
+        self.add_btn = Btn(bar, "+ Add marker", self.add, BLUE, "#ffffff", app.f(13, True),
+                           padx=20, pady=6)
+        self.add_btn.pack(side="left", padx=6)
+        Btn(bar, "Done", lambda: app.show("HomeScreen"), GREEN, DARK_GREEN_TEXT,
+            app.f(13, True), padx=30, pady=6).pack(side="left", padx=6)
+
+    def on_show(self):
+        self.markers = markers_mod.load()
+        self.note.config(text="")
+        self.build()
+
+    def build(self):
+        app = self.app
+        for w in self.rows.winfo_children():
+            w.destroy()
+        hdr = dict(bg=BG, fg=MUTED, font=app.f(10))
+        tk.Label(self.rows, text="Marker", **hdr).grid(row=0, column=0, padx=6)
+        tk.Label(self.rows, text="Printed size (mm)", **hdr).grid(row=0, column=1, padx=6)
+        tk.Label(self.rows, text="Actual size (mm)", **hdr).grid(row=0, column=2, padx=6)
+        self.vars = []
+        for r, m in enumerate(self.markers, 1):
+            tk.Label(self.rows, text=f"ID {m.id}" + ("  (main)" if m.id == config.ARUCO_MARKER_ID
+                                                      else ""),
+                     bg=BG, fg=FG, font=app.f(13, True)).grid(row=r, column=0, padx=8, pady=3,
+                                                              sticky="w")
+            nom, act = tk.StringVar(value=f"{m.nominal_mm:g}"), tk.StringVar(value=f"{m.size_mm:g}")
+            self.vars.append((nom, act))
+            for col, v in ((1, nom), (2, act)):
+                e = tk.Entry(self.rows, textvariable=v, width=7, font=app.f(14), justify="center",
+                             bg=PANEL2, fg=FG, insertbackground=FG, relief="flat")
+                e.grid(row=r, column=col, padx=8, pady=3, ipady=4)
+                e.bind("<FocusOut>", lambda _e: self.commit())
+                e.bind("<Return>", lambda _e: self.commit())
+            Btn(self.rows, "Print PDF", lambda i=r - 1: self.print(i), GREEN, DARK_GREEN_TEXT,
+                app.f(11, True), padx=14, pady=4).grid(row=r, column=3, padx=6)
+            if m.id != config.ARUCO_MARKER_ID:
+                Btn(self.rows, "Remove", lambda i=r - 1: self.remove(i), PANEL, MUTED,
+                    app.f(10), padx=10, pady=4).grid(row=r, column=4, padx=4)
+        self.add_btn.set_enabled(len(self.markers) < markers_mod.MAX_MARKERS)
+
+    def commit(self) -> bool:
+        """Read the boxes; save when every value is valid. Returns True when saved."""
+        new = []
+        for m, (nom, act) in zip(self.markers, self.vars):
+            n, a = markers_mod.parse_mm(nom.get()), markers_mod.parse_mm(act.get())
+            if n is None or a is None:
+                self.note.config(
+                    text=f"Marker ID {m.id}: sizes must be numbers between "
+                         f"{markers_mod.MIN_MM:g} and {markers_mod.MAX_MM:g} mm.", fg=AMBER)
+                return False
+            new.append(markers_mod.Marker(m.id, n, a))
+        if [x.__dict__ for x in new] != [x.__dict__ for x in self.markers]:
+            self.markers = new
+            markers_mod.save(new)
+            self.note.config(text="Saved. New scans use these sizes.", fg=GREEN)
+        return True
+
+    def add(self):
+        if not self.commit() or len(self.markers) >= markers_mod.MAX_MARKERS:
+            return
+        mid = markers_mod.next_id(self.markers)
+        size = self.markers[0].nominal_mm
+        self.markers.append(markers_mod.Marker(mid, size, size))
+        markers_mod.save(self.markers)
+        self.note.config(text=f"Added marker ID {mid}. Print it, place it flat on the board.",
+                         fg=GREEN)
+        self.build()
+
+    def remove(self, i):
+        if not self.commit():
+            return
+        gone = self.markers.pop(i)
+        markers_mod.save(self.markers)
+        self.note.config(text=f"Removed marker ID {gone.id}.", fg=GREEN)
+        self.build()
+
+    def print(self, i):
+        if not self.commit():
+            return
+        m = self.markers[i]
+        try:
+            path = markers_mod.print_pdf(m)
+        except (OSError, ValueError) as e:
+            self.note.config(text=f"Could not make the PDF: {e}", fg=AMBER)
+            return
+        self.note.config(
+            text=f"Saved {storage.shorten(path, 60)}. Print it at 100% (Actual size), "
+                 f"then measure the black square. Its printed size should be {m.nominal_mm:g} mm.",
+            fg=GREEN)
+        if ask(self.app, "Marker PDF saved",
+               f"{path.name}\nis in\n{storage.shorten(path.parent, 50)}\n\n"
+               "Print at 100% / Actual size.",
+               [("Open folder", True, BLUE, "#ffffff"), ("OK", False, GREEN, DARK_GREEN_TEXT)],
+               cancel_value=False):
+            self.app.open_folder(path.parent)
+
+
 class StartScreen(Screen):
     def __init__(self, parent, app):
         super().__init__(parent, app)
@@ -419,6 +560,8 @@ class StartScreen(Screen):
         row2 = tk.Frame(box, bg=BG)
         row2.pack(pady=(8, 0))
         Btn(row2, "How it works", self.how_it_works, PANEL2, FG, app.f(11), padx=24, pady=5
+            ).pack(side="left", padx=4)
+        Btn(row2, "Menu", lambda: app.show("HomeScreen"), PANEL2, FG, app.f(11), padx=24, pady=5
             ).pack(side="left", padx=4)
         Btn(row2, "Quit", app.request_exit, PANEL, MUTED, app.f(11), padx=30, pady=5
             ).pack(side="left", padx=4)

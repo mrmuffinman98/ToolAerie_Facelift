@@ -26,6 +26,7 @@ from pathlib import Path
 import cv2
 
 import config
+import markers as markers_mod
 import export
 import scan_service
 import shape_info
@@ -390,6 +391,7 @@ class Session:
                 "saved": self.saved_at,
             },
             "scan": {"marker_size_mm": config.ARUCO_MARKER_SIZE_MM,
+                     "markers": [m.__dict__ for m in markers_mod.load()],
                      "image_resolution": list(config.IMAGE_RESOLUTION)},
             "layout": {"gap_mm": self.gap_mm, "max_width_mm": self.max_width_mm,
                        **{k: v for k, v in extra.items() if k == "combined"}},

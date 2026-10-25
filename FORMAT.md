@@ -98,3 +98,9 @@ same steps as `tools/*.svg`, only with 0 clearance (`outlines/tool_NN.svg`, `fil
 It is not taken from the mask or any intermediate step. Extra keys on `geometry`:
 `source` (which file), `trace_edge_shift_mm` (how far the traced edge sits from the mask edge,
 about +0.1 mm is normal for vtracer) and `specks_dropped` (stray pieces under 1 mm² left out).
+
+## Markers (v0.4)
+
+`scan.markers` in `drawer.json` lists the scale markers known when the drawer was saved:
+`[{"id": 0, "nominal_mm": 20.0, "size_mm": 20.0}, ...]` (`nominal_mm` = size meant to be printed,
+`size_mm` = real measured size, the one scans use). `scan.marker_size_mm` is still the main marker's size.

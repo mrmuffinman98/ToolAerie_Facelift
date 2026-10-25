@@ -199,3 +199,11 @@ Every saved drawer has `masks/tool_NN.png`: the pure black-and-white mask each t
 
 The `steps` folder is not included in the one-file `.toolaerie` package. Set `SAVE_STEPS = False`
 when the scans are trusted.
+
+## Markers (v0.4)
+
+Menu → **Marker setup**: one row per scale marker with its printed size and its actual size, a
+**Print PDF** button (exact size, saved in `<toolbox>/Markers/`) and **+ Add marker**. If a marker
+prints at the wrong size, don't reprint: measure the black square and type it in "Actual size".
+With one marker in view scans are exactly as before. With two or more registered markers in view,
+the scale is the average of their individual scales (a warning appears if they disagree by >0.5%).
