@@ -182,3 +182,20 @@ aviation-tool-accountability/
   solid are untouched (identical to the original result).
 - **Roundness numbers** for each tool are saved in `drawer.json` (for the board builder's
   "make round" option). Outlines themselves are never rounded by the scanner.
+
+## Saved masks and step pictures (while developing)
+
+Every saved drawer has `masks/tool_NN.png`: the pure black-and-white mask each tool was traced from
+(white = tool, black = everything else, nothing in between). With `SAVE_STEPS = True` in `config.py`
+(the default for now) it also has `steps/scan_NN/` with a picture of every stage:
+
+1. `1_raw_camera.png` straight from the camera
+2. `2_corrected_cropped.png` after lens correction and crop (what the code actually sees)
+3. `3_edge_threshold.png` the original edge-detection picture
+4. `4_original_mask.png` the original code's filled mask
+5. `5_solid_mask.png` after the hollow-fill step
+6. `6_final_mask_<tool>.png` and `7_overlay_<tool>.jpg` per tool (with clearance)
+7. `info.json` the settings and flags for that scan
+
+The `steps` folder is not included in the one-file `.toolaerie` package. Set `SAVE_STEPS = False`
+when the scans are trusted.

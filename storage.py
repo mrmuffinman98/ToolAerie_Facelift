@@ -125,7 +125,7 @@ def remove_tree(path: Path) -> None:
 # The only things the app ever creates inside a saved drawer folder. When a
 # drawer is saved over an older copy, only these are replaced, so any other
 # files the user put in that folder are left alone.
-_APP_ITEMS = ("tools", "photos", "drawer.json", "session.json")  # session.json: older versions
+_APP_ITEMS = ("tools", "photos", "masks", "steps", "drawer.json", "session.json")  # session.json: older versions
 
 
 def is_nonempty_dir(path: Path) -> bool:
@@ -163,8 +163,11 @@ def make_package(folder: Path, out: Path) -> Path:
     folder, out = Path(folder), Path(out)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for f in sorted(folder.rglob("*")):
+            rel = f.relative_to(folder)
+            if rel.parts and rel.parts[0] == "steps":      # troubleshooting pictures stay out
+                continue
             if f.is_file() and f.suffix != ".toolaerie":
-                z.write(f, f.relative_to(folder).as_posix())
+                z.write(f, rel.as_posix())
     return out
 
 

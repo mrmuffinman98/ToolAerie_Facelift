@@ -19,6 +19,11 @@ import numpy as np
 
 import config
 
+# Troubleshooting hook (does nothing unless a dict is assigned here): the scanner
+# app sets this to {} to receive a copy of the edge picture. It only records;
+# it never changes any result.
+trace = None
+
 
 # ---------------------------------------------------------------------------
 # ArUco dictionary lookup
@@ -222,6 +227,8 @@ def extract_silhouette(image: np.ndarray) -> tuple[np.ndarray, np.ndarray, float
     # Morphological closing fills small holes inside the tool outline.
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    if trace is not None:
+        trace["threshold"] = thresh.copy()
 
     contours, _ = cv2.findContours(
         thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE

@@ -158,3 +158,9 @@ AUTOSCAN_CLEAR_SECS = 0.8     # board must be empty this long before re-arming
 # capture.py (the original, calibrated capture) uses. Keep True so every scan has
 # exactly the field of view the camera calibration was made for.
 PREVIEW_USES_STILL_CONFIG = True
+
+# While developing: save every step of each scan (raw photo, corrected photo, edge
+# picture, masks, overlay) into <drawer>/steps/ so each one can be checked by eye.
+# The final mask for every tool is always saved in <drawer>/masks/. Set this to
+# False once the scans are trusted. The steps folder is never put in the .toolaerie file.
+SAVE_STEPS = True

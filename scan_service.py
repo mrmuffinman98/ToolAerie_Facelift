@@ -88,6 +88,8 @@ class ScanResult:
     ignored_outlines: list[np.ndarray] = field(default_factory=list)  # pieces not kept
     expected: int = 1               # the tool count the user asked for
     found: int = 0                  # how many separate pieces were seen in total
+    raw_frame: np.ndarray | None = None          # camera frame before lens correction
+    trace: dict = field(default_factory=dict)    # intermediate pictures for troubleshooting
 
     @property
     def pieces(self) -> int:
@@ -103,7 +105,8 @@ class ScanResult:
             r = ScanResult(self.prepared, part.mask, part.outlines, self.pixels_per_mm,
                            self.settings, self.marker_corners, raw_outlines=part.raw_outlines,
                            width_mm=part.width_mm, height_mm=part.height_mm,
-                           parts=[part], expected=1, found=1)
+                           parts=[part], expected=1, found=1,
+                           raw_frame=self.raw_frame, trace=self.trace)
             r.warnings = _quality_warnings(r)
             out.append(r)
         return out
@@ -193,8 +196,13 @@ def analyze(prepared: np.ndarray, settings: Settings | None = None) -> ScanResul
     quiet = io.StringIO()  # process.py prints progress; keep the console clean
     try:
         # clearance is applied below, per tool, so ask the original step for none
+        trace: dict = {}
         with _config_overrides(replace(s, offset_mm=0.0)), contextlib.redirect_stdout(quiet):
-            mask0, _contours, ppm = process.extract_silhouette(prepared)
+            process.trace = trace
+            try:
+                mask0, _contours, ppm = process.extract_silhouette(prepared)
+            finally:
+                process.trace = None
             marker = process.detect_scale(prepared)[1]
     except RuntimeError as e:
         raise ScanError(_friendly(str(e))) from e
@@ -243,7 +251,9 @@ def analyze(prepared: np.ndarray, settings: Settings | None = None) -> ScanResul
                         height_mm=float(np.ptp(allpts[:, 1])) / ppm,
                         parts=parts,
                         ignored_outlines=[c.reshape(-1, 2).astype(np.float64) for c in dropped],
-                        expected=s.expected, found=len(found_cnts))
+                        expected=s.expected, found=len(found_cnts),
+                        trace={"threshold": trace.get("threshold"), "original_mask": mask0,
+                               "solid_mask": solid, "was_hollow": bool(was_hollow)})
     result.warnings = _count_warnings(result, [cv2.contourArea(c) / ppm ** 2 for c in dropped]) \
         + _quality_warnings(result)
     if was_hollow:

@@ -54,6 +54,7 @@ class ToolRecord:
     geometry: dict = field(default_factory=dict)   # shape_info.analyze_shape(): no clearance
     warnings: list = field(default_factory=list)
     scanned: str = ""
+    mask_file: str = ""              # pure black/white mask this tool was traced from
     scan_id: int = 0                 # tools from one photo share this (undo removes them together)
     # Outline in mm relative to the SVG canvas origin; used for the layout
     # preview only, not for the cut file.
@@ -87,6 +88,7 @@ class Session:
         self.folder = folder
         (folder / "photos").mkdir(parents=True)
         (folder / "tools").mkdir()
+        (folder / "masks").mkdir()
         self.tools: list[ToolRecord] = []
         self.gap_mm = float(config.DEFAULT_TOOL_GAP_MM)
         self.max_width_mm: float | None = None   # None = one column
@@ -114,7 +116,49 @@ class Session:
             if nm and len(parts) > 1:
                 nm = f"{nm} {i}"
             recs.append(self.add_tool(part, nm or None, scan_id=self._scan_seq))
+        if config.SAVE_STEPS:
+            try:
+                self._save_steps(result, parts, recs, self._scan_seq)
+            except OSError:
+                pass                      # troubleshooting pictures must never block a save
         return recs
+
+    def _save_steps(self, result, parts, recs, scan_id: int) -> None:
+        """Write every step of this scan as a picture into steps/scan_NN/."""
+        d = self.folder / "steps" / f"scan_{scan_id:02d}"
+        d.mkdir(parents=True, exist_ok=True)
+        def put(name, img):
+            if img is not None:
+                cv2.imwrite(str(d / name), img)
+        put("1_raw_camera.png", result.raw_frame)                    # straight from the camera
+        put("2_corrected_cropped.png", result.prepared)              # lens-corrected + cropped (what the code sees)
+        tr = result.trace or {}
+        put("3_edge_threshold.png", tr.get("threshold"))             # original edge picture
+        put("4_original_mask.png", tr.get("original_mask"))          # original code's filled mask
+        put("5_solid_mask.png", tr.get("solid_mask"))                # after the hollow-fill step
+        for part, rec in zip(parts, recs):
+            stem = Path(rec.photo_file).stem
+            put(f"6_final_mask_{stem}.png", (part.mask > 0).astype("uint8") * 255)
+            rgb = scan_service.render_overlay(
+                scan_service.ScanResult(result.prepared, part.mask, part.outlines, result.pixels_per_mm,
+                                        result.settings, result.marker_corners, parts=[part]),
+                "overlay", (100000, 100000))
+            cv2.imwrite(str(d / f"7_overlay_{stem}.jpg"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+                        [cv2.IMWRITE_JPEG_QUALITY, 92])
+        (d / "info.json").write_text(json.dumps({
+            "scan": scan_id,
+            "tools_saved": [r.name for r in recs],
+            "tool_count_entered": result.expected,
+            "separate_pieces_found": result.found,
+            "outline_was_hollow_and_filled": bool(tr.get("was_hollow")),
+            "pixels_per_mm": round(result.pixels_per_mm, 4),
+            "clearance_mm": result.settings.offset_mm,
+            "edge_threshold_C": result.settings.adaptive_c,
+            "edge_block_size": result.settings.adaptive_block,
+            "ignore_specks_px2": result.settings.min_area_px,
+            "marker_corners_px": [[round(float(x), 1) for x in p] for p in result.marker_corners],
+            "warnings": result.warnings,
+        }, indent=2))
 
     def add_tool(self, result: scan_service.ScanResult, name: str | None = None,
                  scan_id: int = 0) -> ToolRecord:
@@ -124,6 +168,9 @@ class Session:
 
         photo = self.folder / "photos" / f"{stem}.jpg"
         cv2.imwrite(str(photo), result.prepared, [cv2.IMWRITE_JPEG_QUALITY, 92])
+
+        mask_path = self.folder / "masks" / f"{stem}.png"
+        cv2.imwrite(str(mask_path), (result.mask > 0).astype("uint8") * 255)   # only 0 and 255
 
         raw_svg = scan_service.to_svg_string(result)
         svg_path = export.svg_to_file(raw_svg, result.pixels_per_mm,
@@ -149,6 +196,7 @@ class Session:
                          warnings=list(result.warnings),
                          scanned=time.strftime("%Y-%m-%d %H:%M:%S"),
                          scan_id=scan_id,
+                         mask_file=str(mask_path.relative_to(self.folder)),
                          preview_outlines_mm=preview)
         self.tools.append(rec)
         self.dirty = True
@@ -164,8 +212,11 @@ class Session:
         while self.tools and (self.tools[-1].scan_id == sid if sid else not removed):
             removed.append(self.tools.pop())
         for rec in removed:
-            for rel in (rec.svg_file, rec.photo_file):
-                (self.folder / rel).unlink(missing_ok=True)
+            for rel in (rec.svg_file, rec.photo_file, rec.mask_file):
+                if rel:
+                    (self.folder / rel).unlink(missing_ok=True)
+        if sid:
+            storage.remove_tree(self.folder / "steps" / f"scan_{sid:02d}")
         self.dirty = bool(self.tools)
         self._save_manifest()
         return removed[::-1]
@@ -275,7 +326,7 @@ class Session:
                 "id": t.uid,
                 "index": t.index,
                 "name": t.name,
-                "files": {"svg": t.svg_file, "photo": t.photo_file},
+                "files": {"svg": t.svg_file, "photo": t.photo_file, "mask": t.mask_file},
                 "scale_px_per_mm": round(t.pixels_per_mm, 4),
                 "clearance_mm_in_svg": t.clearance_mm,
                 "svg_size_mm": [round(t.width_mm, 3), round(t.height_mm, 3)],

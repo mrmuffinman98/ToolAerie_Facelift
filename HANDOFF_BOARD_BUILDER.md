@@ -86,3 +86,4 @@ Crash recovery for unsaved drawers, adding tools to an already-saved drawer, nam
   option (replace the outline with a circle of equivalent diameter; show `max_radial_dev_mm` so the
   user can judge). The scanner never rounds anything itself.
 - Re-scan any drawer made before v0.3 that contains large tools (hollow outlines).
+- Each tool now also has `masks/tool_NN.png` (`files.mask` in drawer.json): the exact black/white mask it was traced from. A `steps/` folder of troubleshooting pictures sits in the drawer folder but is NOT in the `.toolaerie` file.

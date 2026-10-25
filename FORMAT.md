@@ -11,7 +11,10 @@ Drawer 1/
 │                                Illustrator / LightBurn / any laser software
 ├── drawer.json               <- manifest: geometry and measurements (below)
 ├── tools/tool_01.svg ...     <- one real-size SVG per tool (clearance included)
-└── photos/tool_01.jpg ...    <- the photo each outline came from (undistorted, cropped)
+├── masks/tool_01.png ...     <- pure black/white mask each tool was traced from (255 = tool)
+├── photos/tool_01.jpg ...    <- the photo each outline came from (undistorted, cropped)
+└── steps/scan_01/ ...        <- troubleshooting pictures of every processing step (folder only;
+                                 NOT inside the .toolaerie file; can be turned off with SAVE_STEPS)
 ```
 
 `.toolaerie` is a normal zip. `drawer.json` sits at its top level.

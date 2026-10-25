@@ -605,7 +605,9 @@ class ScanScreen(Screen):
 
         def work():
             prepared = scan_service.prepare(frame)
-            return prepared, scan_service.analyze(prepared, settings)
+            res = scan_service.analyze(prepared, settings)
+            res.raw_frame = frame                      # kept for the troubleshooting steps
+            return prepared, res
 
         def ok(res):
             prepared, result = res
@@ -784,6 +786,7 @@ class ReviewScreen(Screen):
         def ok(result):
             if token != self._token:
                 return  # a newer adjustment is already running
+            result.raw_frame = self.result.raw_frame if self.result else None
             self.result = result
             self._show_result()
 

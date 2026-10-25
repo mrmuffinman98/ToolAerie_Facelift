@@ -119,3 +119,45 @@ def test_roundness_of_a_long_tool_is_low():
     r = _quiet(ss.scan, cam.frame(), ss.Settings())
     g = shape_info.analyze_shape(r.raw_outlines, r.pixels_per_mm)
     assert g["circularity"] < 0.5
+
+
+def test_masks_and_steps_are_saved_and_kept_out_of_the_package(tmp_path, monkeypatch):
+    import zipfile
+    monkeypatch.setattr(config, "WORK_DIR", str(tmp_path / "work"))
+    monkeypatch.setattr(config, "SAVE_STEPS", True)
+    frame = _two_tool_frame()
+    img = ss.prepare(frame)
+    r = _quiet(ss.analyze, img, ss.Settings(expected=2, offset_mm=1.0))
+    r.raw_frame = frame
+    s = Session("Drawer", root=str(tmp_path))
+    recs = _quiet(s.add_scan, r, "")
+    for rec in recs:                                           # pure black/white mask per tool
+        m = cv2.imread(str(s.folder / rec.mask_file), cv2.IMREAD_UNCHANGED)
+        assert set(np.unique(m)) <= {0, 255} and (m == 255).any()
+    steps = s.folder / "steps" / "scan_01"
+    names = {p.name for p in steps.iterdir()}
+    assert {"1_raw_camera.png", "2_corrected_cropped.png", "3_edge_threshold.png",
+            "4_original_mask.png", "5_solid_mask.png", "info.json"} <= names
+    assert any(n.startswith("6_final_mask_") for n in names)
+    assert any(n.startswith("7_overlay_") for n in names)
+
+    dest = tmp_path / "saved" / "Drawer"
+    s.save_to(dest)
+    assert (dest / "steps" / "scan_01" / "info.json").exists()      # in the folder...
+    with zipfile.ZipFile(next(dest.glob("*.toolaerie"))) as z:      # ...but not in the one-file package
+        assert not any(n.startswith("steps/") for n in z.namelist())
+        assert any(n.startswith("masks/") for n in z.namelist())
+    s.remove_last()
+    assert not steps.exists()
+    assert not list((s.folder / "masks").iterdir())
+
+
+def test_steps_can_be_turned_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WORK_DIR", str(tmp_path / "work"))
+    monkeypatch.setattr(config, "SAVE_STEPS", False)
+    img = ss.prepare(_two_tool_frame())
+    r = _quiet(ss.analyze, img, ss.Settings(expected=2))
+    s = Session("Drawer", root=str(tmp_path))
+    _quiet(s.add_scan, r, "")
+    assert not (s.folder / "steps").exists()
+    assert list((s.folder / "masks").iterdir())               # final masks are always kept
