@@ -25,6 +25,7 @@ from pathlib import Path
 
 import cv2
 
+import calibration
 import config
 import markers as markers_mod
 import export
@@ -391,6 +392,7 @@ class Session:
                 "saved": self.saved_at,
             },
             "scan": {"marker_size_mm": config.ARUCO_MARKER_SIZE_MM,
+                     "camera_profile": calibration.active().name,
                      "markers": [m.__dict__ for m in markers_mod.load()],
                      "image_resolution": list(config.IMAGE_RESOLUTION)},
             "layout": {"gap_mm": self.gap_mm, "max_width_mm": self.max_width_mm,

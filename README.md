@@ -207,3 +207,22 @@ Menu → **Marker setup**: one row per scale marker with its printed size and it
 prints at the wrong size, don't reprint: measure the black square and type it in "Actual size".
 With one marker in view scans are exactly as before. With two or more registered markers in view,
 the scale is the average of their individual scales (a warning appears if they disagree by >0.5%).
+
+## Camera setup (v3)
+
+Menu → **Camera setup**. A *camera profile* holds the lens correction, picture size, focus and crop for one
+camera position. Your original numbers from `config.py` are kept as the built-in profile "Original housing"
+(never changed). To set up a new position (bigger board, different height):
+
+1. **New profile**: enter the board size. The app works out the camera height, focus setting and detail (px/mm).
+2. **Print the checkerboard** (PDF at the right size for that height; Letter or Tabloid).
+3. **Take photos**: the live view finds the checkerboard, takes a photo when you hold still, and wants new
+   positions and tilts, filling a 3x3 map of the frame (corners and edges matter most).
+4. **Result**: calibration error (under 0.5 px is good), a before/after picture, and the crop. Save and use it,
+   then the **Ready check** confirms the markers are seen, the scale matches the height, and several markers agree.
+
+The calibration is the same method as `camera_calibration.py` (9x6 checkerboard, full-resolution corners,
+`cv2.calibrateCamera` with default settings). Scans still go through the original undistort, crop, marker scale,
+threshold, vtracer and SVG steps; the only change is that the lens numbers, picture size, focus and crop come from
+the profile in use. Profiles are stored in `~/.config/toolaerie/camera_profiles.json`, calibration photos in
+`~/.config/toolaerie/calibration/<profile>/`. Each saved drawer records the profile name (`scan.camera_profile`).

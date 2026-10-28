@@ -141,6 +141,12 @@ def _undistort_maps(w: int, h: int):
         return _maps_cache[key]
 
 
+def clear_undistort_cache() -> None:
+    """Forget the cached lookup tables (call after the camera profile changes)."""
+    with _maps_lock:
+        _maps_cache.clear()
+
+
 def prepare(raw_bgr: np.ndarray) -> np.ndarray:
     """Undistort and crop a raw camera frame (BGR)."""
     h, w = raw_bgr.shape[:2]

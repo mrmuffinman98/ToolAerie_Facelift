@@ -104,3 +104,8 @@ about +0.1 mm is normal for vtracer) and `specks_dropped` (stray pieces under 1 
 `scan.markers` in `drawer.json` lists the scale markers known when the drawer was saved:
 `[{"id": 0, "nominal_mm": 20.0, "size_mm": 20.0}, ...]` (`nominal_mm` = size meant to be printed,
 `size_mm` = real measured size, the one scans use). `scan.marker_size_mm` is still the main marker's size.
+
+## Camera profile (v0.5)
+
+`scan.camera_profile` in `drawer.json` is the name of the camera profile the drawer was scanned with.
+Optional; readers ignore it.

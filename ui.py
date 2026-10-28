@@ -288,3 +288,46 @@ class FolderPicker:
             return
         self.result = self.cwd
         self.top.destroy()
+
+
+class Screen(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=BG)
+        self.app = app
+        self._flash_id = None
+        self.toast = tk.Label(self, text="", bg=BG, fg=FG, font=app.f(12, True))
+
+    def on_show(self): ...
+    def on_hide(self): ...
+    def on_key(self, e): ...
+    def cancel_timers(self):
+        if self._flash_id:
+            self.after_cancel(self._flash_id)
+            self._flash_id = None
+
+    def flash(self, text, color=GREEN, ms=3500):
+        self.toast.config(text=text, fg=color)
+        self.toast.place(relx=0.5, rely=0.02, anchor="n")
+        self.toast.lift()
+        if self._flash_id:
+            self.after_cancel(self._flash_id)
+        self._flash_id = self.after(ms, self.toast.place_forget)
+
+    def photo_canvas(self, parent) -> tk.Canvas:
+        c = tk.Canvas(parent, bg="#0b0e12", highlightthickness=0)
+        c.photo = None
+        return c
+
+    @staticmethod
+    def fit(img: np.ndarray, canvas: tk.Canvas) -> np.ndarray:
+        cw, ch = max(canvas.winfo_width(), 50), max(canvas.winfo_height(), 50)
+        h, w = img.shape[:2]
+        s = min(cw / w, ch / h)
+        return cv2.resize(img, (max(1, int(w * s)), max(1, int(h * s))),
+                          interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
+
+    def draw(self, canvas: tk.Canvas, img: np.ndarray, is_bgr=False):
+        canvas.photo = png_photo(self.fit(img, canvas), is_bgr)
+        canvas.delete("all")
+        canvas.create_image(canvas.winfo_width() // 2, canvas.winfo_height() // 2,
+                            image=canvas.photo)

@@ -34,7 +34,9 @@ import cv2
 import numpy as np
 
 import autoscan
+import calibration
 import camera as cam_mod
+import camera_screens as cs
 import config
 import markers as markers_mod
 import scan_service
@@ -42,7 +44,7 @@ import storage
 from scan_service import ScanError, Settings
 from session import Session
 from ui import (BG, PANEL, PANEL2, FG, MUTED, GREEN, AMBER, RED, BLUE, DARK_GREEN_TEXT,
-                Btn, Stepper, FolderPicker, ask, png_photo)
+                Btn, Stepper, FolderPicker, Screen, ask, png_photo)
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -80,6 +82,9 @@ class App(tk.Tk):
         self.report_callback_exception = self._on_ui_error
         self._closing = False
 
+        calibration.apply_active()         # lens/crop/focus of the camera profile in use
+        self._camera_kind, self._camera_folder = camera_kind, folder
+        self.calib: dict = {}              # camera-setup wizard state
         self.settings = Settings()
         self.session: Session | None = None
         self.toolbox: Path = storage.default_toolbox()   # where drawers get saved
@@ -121,7 +126,9 @@ class App(tk.Tk):
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(0, weight=1)
         self.screens = {}
-        for cls in (HomeScreen, MarkerScreen, StartScreen, ScanScreen, ReviewScreen, DoneScreen):
+        for cls in (HomeScreen, MarkerScreen, StartScreen, ScanScreen, ReviewScreen, DoneScreen,
+                    cs.CameraScreen, cs.CalibPlanScreen, cs.CalibPrintScreen,
+                    cs.CalibCaptureScreen, cs.CalibResultScreen, cs.CalibReadyScreen):
             s = cls(body, self)
             s.grid(row=0, column=0, sticky="nsew")
             self.screens[cls.__name__] = s
@@ -144,7 +151,50 @@ class App(tk.Tk):
                 weight="bold" if bold else "normal")
         return self._fonts[key]
 
+    def restart_camera(self, done=None, simulate_board: bool = False):
+        """Stop and re-open the camera (after a camera profile change: new picture size
+        and focus are read from config when it starts). simulate_board: practice mode
+        shows a checkerboard for the calibration screens."""
+        old = self.feed
+
+        def work():
+            try:
+                old.stop()
+            except Exception:
+                pass
+            practice = isinstance(old.camera, (cam_mod.DemoCamera, cam_mod.CalibDemoCamera))
+            err = None
+            try:
+                if practice:
+                    camera = cam_mod.CalibDemoCamera() if simulate_board else cam_mod.DemoCamera()
+                else:
+                    camera = cam_mod.open_camera(
+                        "pi" if self._camera_kind == "auto" else self._camera_kind,
+                        self._camera_folder)
+            except cam_mod.CameraError as e:
+                camera, err = cam_mod.DemoCamera(), str(e)
+            feed = cam_mod.LiveFeed(camera)
+            try:
+                feed.start()
+            except cam_mod.CameraError as e:
+                err = str(e)
+                feed = cam_mod.LiveFeed(cam_mod.DemoCamera())
+                feed.start()
+            return feed, err
+
+        def ok(res):
+            self.feed, err = res
+            if err:
+                self.startup_error = err
+                self.screens[self.current].flash(f"Camera problem: {err}", RED, 8000)
+            if done:
+                done()
+
+        self.run_bg(work, ok)
+
     def show(self, name: str):
+        if self.current and self.current != name:
+            self.screens[self.current].on_hide()
         self.current = name
         scr = self.screens[name]
         scr.tkraise()
@@ -341,48 +391,6 @@ class App(tk.Tk):
             self.destroy()
 
 
-class Screen(tk.Frame):
-    def __init__(self, parent, app: App):
-        super().__init__(parent, bg=BG)
-        self.app = app
-        self._flash_id = None
-        self.toast = tk.Label(self, text="", bg=BG, fg=FG, font=app.f(12, True))
-
-    def on_show(self): ...
-    def on_key(self, e): ...
-    def cancel_timers(self):
-        if self._flash_id:
-            self.after_cancel(self._flash_id)
-            self._flash_id = None
-
-    def flash(self, text, color=GREEN, ms=3500):
-        self.toast.config(text=text, fg=color)
-        self.toast.place(relx=0.5, rely=0.02, anchor="n")
-        self.toast.lift()
-        if self._flash_id:
-            self.after_cancel(self._flash_id)
-        self._flash_id = self.after(ms, self.toast.place_forget)
-
-    def photo_canvas(self, parent) -> tk.Canvas:
-        c = tk.Canvas(parent, bg="#0b0e12", highlightthickness=0)
-        c.photo = None
-        return c
-
-    @staticmethod
-    def fit(img: np.ndarray, canvas: tk.Canvas) -> np.ndarray:
-        cw, ch = max(canvas.winfo_width(), 50), max(canvas.winfo_height(), 50)
-        h, w = img.shape[:2]
-        s = min(cw / w, ch / h)
-        return cv2.resize(img, (max(1, int(w * s)), max(1, int(h * s))),
-                          interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
-
-    def draw(self, canvas: tk.Canvas, img: np.ndarray, is_bgr=False):
-        canvas.photo = png_photo(self.fit(img, canvas), is_bgr)
-        canvas.delete("all")
-        canvas.create_image(canvas.winfo_width() // 2, canvas.winfo_height() // 2,
-                            image=canvas.photo)
-
-
 # ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
@@ -399,7 +407,9 @@ class HomeScreen(Screen):
             app.f(20, True), padx=70, pady=14 if c else 20).pack(fill="x", pady=5)
         Btn(box, "MARKER SETUP", lambda: app.show("MarkerScreen"), BLUE, "#ffffff",
             app.f(20, True), padx=70, pady=14 if c else 20).pack(fill="x", pady=5)
-        tk.Label(box, text="Marker setup: print scale markers and set their real sizes.",
+        Btn(box, "CAMERA SETUP", lambda: app.show("CameraScreen"), BLUE, "#ffffff",
+            app.f(20, True), padx=70, pady=14 if c else 20).pack(fill="x", pady=5)
+        tk.Label(box, text="Marker setup: print scale markers.  Camera setup: calibrate the camera.",
                  bg=BG, fg=MUTED, font=app.f(11)).pack(pady=(8, 10))
         Btn(box, "Quit", app.request_exit, PANEL, MUTED, app.f(11), padx=30, pady=5).pack()
 

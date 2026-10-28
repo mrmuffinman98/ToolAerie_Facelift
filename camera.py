@@ -264,6 +264,62 @@ class DemoCamera(BaseCamera):
 # Live feed: grabs frames on a background thread so the UI never waits
 # ---------------------------------------------------------------------------
 
+class CalibDemoCamera(BaseCamera):
+    """Practice camera for the calibration screens: a checkerboard seen through a lens
+    with a known distortion, moving to a new spot every few seconds. Lets the guided
+    calibration be tried (and tested) without hardware. Not used with a real camera."""
+    name = "Practice camera (checkerboard simulator)"
+    HOLD = 3.0                      # seconds the board stays still at each spot
+    DISTANCE_MM = 900.0
+    GT_DIST = (-0.35, 0.15, 0.0005, -0.0004, 0.0)
+
+    def __init__(self):
+        self._t0 = time.time()
+        self._idx = -1
+        self._img: np.ndarray | None = None
+        rng = np.random.default_rng(7)
+        self._poses = []
+        for fy in (-0.13, 0.0, 0.13):
+            for fx in (-0.27, 0.0, 0.27):
+                for k in range(3):
+                    self._poses.append((fx + rng.uniform(-.03, .03), fy + rng.uniform(-.03, .03),
+                                        rng.uniform(-.35, .35), rng.uniform(-.35, .35),
+                                        rng.uniform(-.6, .6)))
+        rng.shuffle(self._poses)
+
+    def frame(self) -> np.ndarray:
+        idx = int((time.time() - self._t0) // self.HOLD) % len(self._poses)
+        if idx != self._idx or self._img is None or \
+                self._img.shape[1] != config.IMAGE_RESOLUTION[0]:
+            self._idx, self._img = idx, self._render(self._poses[idx])
+        return self._img.copy()
+
+    def _render(self, pose) -> np.ndarray:
+        import calibration
+        w, h = config.IMAGE_RESOLUTION
+        f = calibration.focal_for((w, h))
+        K = np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1.0]])
+        D = np.array(self.GT_DIST)
+        view_w = self.DISTANCE_MM * w / f
+        sq = 0.30 * view_w / 10
+        fx, fy, rx, ry, rz = pose
+        rv = np.array([rx, ry, rz], float)
+        tv = np.array([fx * view_w, fy * view_w, self.DISTANCE_MM], float)
+        img = np.full((h, w, 3), 235, np.uint8)
+        for r in range(7):
+            for c in range(10):
+                if (r + c) % 2 == 0:
+                    continue
+                a = np.array([[c, r, 0], [c + 1, r, 0], [c + 1, r + 1, 0], [c, r + 1, 0]], float)
+                a = (a - [5, 3.5, 0]) * sq
+                poly = [p + (q - p) * t for p, q in zip(a, np.roll(a, -1, axis=0))
+                        for t in np.linspace(0, 1, 6, endpoint=False)]
+                pr, _ = cv2.projectPoints(np.array(poly), rv, tv, K, D)
+                cv2.fillPoly(img, [np.round(pr.reshape(-1, 2) * 16).astype(np.int32)],
+                             (20, 20, 20), lineType=cv2.LINE_AA, shift=4)
+        return img
+
+
 class LiveFeed:
     """Continuously reads a camera and keeps the newest frame available."""
 
